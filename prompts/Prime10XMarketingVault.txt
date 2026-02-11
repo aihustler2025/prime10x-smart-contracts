@@ -1,0 +1,321 @@
+This is the contract that will actually hold TENX tokens and release them after lock to:
+SocialFi raffle winners
+
+
+Creators (via vouchers / rewards)
+
+
+Referral commissions for presale/public sale
+
+
+Any other “promotional / marketing” allocations
+
+
+All calculations (who gets how much) are done off-chain (Supabase, exports, scripts).
+ This contract’s job is just to:
+receive TENX,
+
+
+lock balances per user,
+
+
+enforce 12-month lock,
+
+
+let users claim when unlock time comes.
+
+
+It does not know about shards, quests, minerals, raffle logic, etc.
+
+🧠 Simple overview before the prompt
+In your system, this vault will:
+Hold a pool of TENX reserved for marketing/rewards (your 200k for SocialFi + influencers etc. over time).
+
+
+Lock reward allocations per wallet, per season or campaign.
+
+
+Release TENX only after a set time (e.g., 12 months after TGE).
+
+
+Core design:
+TENX is a standard ERC-20 token on Base (18 decimals).
+
+
+Vault is funded manually (you or your dev send TENX to it).
+
+
+Admin (or scripts) call lockTokensFor(user, amount, seasonId) to assign locked balances.
+
+
+Users call claim() after unlock to receive their tokens.
+
+
+No TGE math or RAD logic lives here — that’s separate.
+
+🛠 Smart Contract #3 — Marketing Vault (Codex Prompt)
+👉 Copy everything between the lines and paste into ChatGPT Codex:
+You are ChatGPT Codex. Generate a complete, production-grade Solidity smart contract for a Prime10X Marketing Vault to lock and distribute TENX ERC-20 tokens on the Base network.
+
+============================================================
+PROJECT CONTEXT (READ CAREFULLY)
+============================================================
+Prime10X runs an off-chain SocialFi campaign and other marketing initiatives. Off-chain systems decide:
+- which wallet gets how many TENX as rewards (raffles, creators, referral commissions, etc.),
+- when those rewards become claimable (after a global lock period).
+
+This contract:
+- holds TENX tokens,
+- tracks "locked reward balances" per user (and optionally per season),
+- enforces a time-based lock (e.g. 12 months after TGE),
+- allows users to claim tokens once unlocked.
+
+The contract does NOT:
+- calculate rewards,
+- know about shards, quests, raffles, or vouchers,
+- handle profit-sharing (RAD) or staking.
+
+All calculations are off-chain. The contract only enforces locking and claiming.
+
+============================================================
+BASIC SETUP
+============================================================
+
+- Network: Base (EVM-compatible)
+- Token: TENX ERC-20 (18 decimals), address provided at deployment.
+- Solidity: ^0.8.20
+
+Contract name: Prime10XMarketingVault
+
+Use:
+- OpenZeppelin Ownable
+- OpenZeppelin ReentrancyGuard
+- OpenZeppelin IERC20
+
+============================================================
+LOCKING MODEL
+============================================================
+
+Global parameters:
+- TENX token address is immutable (set in constructor).
+- TGE timestamp is set once by the owner using `setTGETimestamp`.
+- Lock duration is a constant: 365 days (12 months) after TGE.
+
+Unlock time rule:
+- `unlockTime = tgeTimestamp + 365 days`
+- Users can only claim AFTER `block.timestamp >= unlockTime`.
+
+The owner must:
+- set TGE timestamp exactly once (cannot be changed afterward),
+- fund the vault with enough TENX tokens to cover all locked allocations.
+
+============================================================
+USER BALANCES & SEASONS
+============================================================
+
+We want to support multiple "seasons" or campaigns, but claiming can be global per user.
+
+Store:
+- mapping(address => uint256) private _totalLocked;     // total unclaimed locked TENX for a user
+- mapping(address => uint256) private _totalClaimed;    // total TENX claimed by a user
+- mapping(uint256 => uint256) private _seasonTotalLocked; // total locked per season
+- mapping(address => mapping(uint256 => uint256)) private _lockedBySeason; // user locked amount per season
+
+Definitions:
+- "locked" means assigned to the user in the vault but not yet claimable until unlockTime.
+- "claimed" means already withdrawn by the user.
+
+============================================================
+ADMIN / DISTRIBUTOR ROLE
+============================================================
+
+Roles:
+- Owner: full control (Ownable).
+- Optional distributor addresses: added/removed by owner, allowed to call allocation functions.
+
+Add:
+- mapping(address => bool) private _distributors;
+
+Functions:
+- function setDistributor(address account, bool isDistributor) external onlyOwner;
+
+Distributors and owner can:
+- allocate locked rewards to users.
+
+============================================================
+ALLOCATION FUNCTIONS
+============================================================
+
+The contract does NOT pull tokens from users; it only allocates from the vault’s balance.
+
+Implement:
+
+1) function allocateLockedTokens(address user, uint256 amount, uint256 seasonId) external onlyOwnerOrDistributor
+   Requirements:
+   - user != address(0)
+   - amount > 0
+   - seasonId > 0
+   - vault must hold enough TENX to eventually cover all allocations (not enforced per call, but provide a check function for owner)
+   Effects:
+   - increase _totalLocked[user] by amount
+   - increase _lockedBySeason[user][seasonId] by amount
+   - increase _seasonTotalLocked[seasonId] by amount
+   - emit Locked(user, amount, seasonId)
+
+2) function batchAllocateLockedTokens(address[] calldata users, uint256[] calldata amounts, uint256 seasonId) external onlyOwnerOrDistributor
+   - lengths must match
+   - loop through and call internal allocation logic
+   - gas-optimized as reasonable
+
+NOTE:
+- This contract assumes the TENX tokens are pre-funded and available in the vault balance.
+- You do NOT need to transfer tokens in at allocation time; only when users claim.
+
+============================================================
+CLAIM LOGIC
+============================================================
+
+Users can claim their unlocked rewards once TGE + 365 days has passed.
+
+Implement:
+- function claim() external nonReentrant
+   Behavior:
+   - require TGE timestamp set
+   - require block.timestamp >= unlockTime
+   - compute claimable = _totalLocked[msg.sender]
+   - require claimable > 0
+   - set _totalLocked[msg.sender] = 0
+   - increase _totalClaimed[msg.sender] by claimable
+   - transfer `claimable` TENX from vault to msg.sender
+   - emit Claimed(msg.sender, claimable)
+
+Owner convenience:
+- function claimFor(address user) external nonReentrant onlyOwner
+   - same logic as claim(), but callable by owner to assist users if needed.
+
+View helpers:
+- function totalLockedOf(address user) external view returns (uint256);
+- function totalClaimedOf(address user) external view returns (uint256);
+- function lockedBySeason(address user, uint256 seasonId) external view returns (uint256);
+- function seasonTotalLocked(uint256 seasonId) external view returns (uint256);
+- function getUnlockTime() external view returns (uint256);
+- function isUnlocked() public view returns (bool);
+
+============================================================
+ADMIN FUNCTIONS
+============================================================
+
+- function setTGETimestamp(uint256 tgeTimestamp) external onlyOwner
+   - can be called only once (store a bool `tgeSet`).
+   - tgeTimestamp must be in the future at the time of setting.
+
+- function vaultBalance() public view returns (uint256)
+   - return TENX.balanceOf(address(this));
+
+- function rescueTokens(address token, address to, uint256 amount) external onlyOwner
+   - allow owner to withdraw non-TENX tokens accidentally sent to this contract.
+   - MUST NOT allow withdrawing TENX that is needed to cover locked balances.
+   - Enforce:
+     - if token == TENX:
+       - ensure (TENX.balanceOf(address(this)) - amount) >= totalLockedOutstanding
+     - totalLockedOutstanding = sum of all _totalLocked[user] (keep a global `_globalLocked` counter updated on allocation and claiming).
+
+============================================================
+EVENTS
+============================================================
+
+Emit events:
+
+- event Locked(address indexed user, uint256 amount, uint256 indexed seasonId);
+- event Claimed(address indexed user, uint256 amount);
+- event TGETimestampSet(uint256 tgeTimestamp);
+- event DistributorUpdated(address indexed account, bool isDistributor);
+
+============================================================
+SECURITY / QUALITY REQUIREMENTS
+============================================================
+
+- Use Solidity ^0.8.20 (no need for SafeMath).
+- Use ReentrancyGuard on claim and claimFor.
+- Validate inputs in allocation functions.
+- Ensure TGE timestamp can only be set once.
+- Do not allow claiming before unlock time.
+- Use clear require messages like:
+  - "MarketingVault: TGE already set"
+  - "MarketingVault: TGE not set"
+  - "MarketingVault: not unlocked yet"
+  - "MarketingVault: nothing to claim"
+  - "MarketingVault: invalid user"
+  - "MarketingVault: invalid amount"
+  - "MarketingVault: invalid season"
+- Keep the code clean, readable, and well-commented.
+
+============================================================
+BEGIN OUTPUT NOW.
+Generate full Solidity code only.
+============================================================
+
+
+🧩 Human Explanation — What This Vault Actually Does (Plain English)
+Here’s what this contract will do in your system:
+✔ Holds TENX tokens
+Your team sends some amount of TENX to this contract (for SocialFi rewards, creators, referrals, etc.).
+✔ Records who should get what
+After Season 1 (and future seasons), your backend:
+calculates how many TENX each wallet should receive (from raffles, creator rewards, etc.),
+
+
+calls allocateLockedTokens(user, amount, seasonId).
+
+
+The vault updates its internal accounting but does not pay anything yet.
+✔ Enforces a 12-month global lock from TGE
+Once you set TGE timestamp (e.g. Feb 5, 2026), unlock time becomes TGE + 365 days.
+
+
+Before that date → users cannot claim from this vault.
+
+
+After that date → they can claim all their locked rewards.
+
+
+✔ Users self-claim
+After unlock:
+User connects wallet → dApp calls claim() on their behalf.
+
+
+Vault sends them all their locked TENX.
+
+
+✔ Very flexible, simple core
+It doesn’t know:
+why the user is rewarded,
+
+
+whether the reward came from SocialFi Season 1, Season 2, or influencers.
+
+
+It just knows:
+“This wallet has X locked TENX for Season Y; when unlock time comes, let them claim it.”
+
+
+
+✅ What you should do next
+Paste the prompt into Codex.
+
+
+Get the generated Solidity contract.
+
+
+Bring the generated code back to me here.
+
+
+I’ll review and sanity-check it for you & your dev.
+
+
+When we’re done with Marketing Vault and you’re happy:
+We can proceed to Smart Contract #4 — Raffle Contract,
+
+
+Or pause and focus on documentation/whitepaper addendum.
+

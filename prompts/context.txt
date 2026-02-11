@@ -1,0 +1,522 @@
+You are ChatGPT Codex. Generate a complete, production-grade Solidity smart contract for a Prime10X Raffle Reward Vault to distribute TENX ERC-20 tokens to raffle winners on the Base network.
+============================================================
+PROJECT CONTEXT (READ CAREFULLY)
+Prime10X runs an off-chain SocialFi raffle system (Season 1):
+Users earn shards → forge minerals → minerals become raffle tickets.
+
+
+Raffles exist in tiers: Bronze, Copper, Silver, Gold, Diamond.
+
+
+Winners are selected OFF-CHAIN (in the backend) for each raffle draw.
+
+
+Season 1 has a 50,000 TENX raffle pool broken into:
+
+
+Bronze, Copper, Silver, Gold, Diamond tiers with specific draw frequencies and per-winner amounts.
+
+
+All of that math (number of winners, per-winner TENX, how many draws) is handled off-chain.
+
+
+This contract:
+Holds TENX tokens dedicated only to raffle rewards.
+
+
+Stores a Merkle root per raffleId.
+
+
+Allows winners to claim TENX using a Merkle proof.
+
+
+Optionally enforces a global unlock time: TGE + 365 days (12-month lock).
+
+
+Ensures each wallet can only claim once per raffle.
+
+
+This contract does NOT:
+Handle randomness, ticket logic, or how winners are chosen.
+
+
+Know anything about shards, minerals, ranks, streaks, or SocialFi UI.
+
+
+Manage marketing allocations or creator rewards (that’s the Marketing Vault’s job).
+
+
+Know the 50,000 TENX breakdown; it just enforces per-raffle totalTenxPool.
+
+
+All raffle selection logic is OFF-CHAIN.
+ This contract is a trust-minimized payout mechanism.
+============================================================
+BASIC SETUP
+Network: Base (EVM-compatible)
+
+
+Token: TENX ERC-20 (18 decimals), address passed in constructor.
+
+
+Solidity: pragma solidity ^0.8.20;
+
+
+Contract name: Prime10XRaffleVault
+Use:
+Ownable (OpenZeppelin)
+
+
+ReentrancyGuard (OpenZeppelin)
+
+
+IERC20 (OpenZeppelin)
+
+
+MerkleProof (OpenZeppelin)
+
+
+============================================================
+RAFFLE MODEL
+We support multiple raffles over time, across seasons and tiers.
+Each raffle has:
+struct Raffle {
+    uint256 seasonId;       // SocialFi season ID (e.g. 1 for Season 1)
+    uint8   tier;           // 0=Bronze, 1=Copper, 2=Silver, 3=Gold, 4=Diamond
+    bytes32 merkleRoot;     // Merkle root of (winner, raffleId, amount)
+    uint256 totalTenxPool;  // Total TENX allocated to this raffle
+    uint256 totalClaimed;   // Total TENX claimed so far
+    bool    active;         // Whether claims are enabled
+}
+
+mapping(uint256 => Raffle) private _raffles;
+mapping(uint256 => mapping(address => bool)) private _hasClaimed;
+
+Off-chain, for each raffle:
+You build a Merkle tree where each leaf is:
+ leaf = keccak256(abi.encodePacked(winnerAddress, raffleId, tenxAmount));
+
+
+You deploy TENX to this vault, then call an admin function to configure:
+ raffleId, seasonId, tier, merkleRoot, totalTenxPool, active.
+
+
+On-chain:
+The contract stores Raffle data per raffleId.
+
+
+Winners call claim(raffleId, tenxAmount, merkleProof) to receive TENX.
+
+
+============================================================
+UNLOCK / LOCK LOGIC
+We want optional time-based locking, similar to the Marketing Vault:
+Global parameters:
+TENX token address immutable.
+
+
+TGE timestamp set once via setTGETimestamp.
+
+
+Lock duration = 365 days after TGE.
+
+
+Boolean _lockEnforced (default: true).
+
+
+Unlock rules:
+If _lockEnforced == true:
+
+
+unlockTime = tgeTimestamp + 365 days
+
+
+Users can only claim if block.timestamp >= unlockTime.
+
+
+If _lockEnforced == false:
+
+
+Claims can happen immediately (for flexibility in future seasons or testnets).
+
+
+Admin needs to:
+Set TGE timestamp once, in advance (e.g. Feb 5, 2026).
+
+
+Typically leave _lockEnforced = true for Season 1, to enforce 12-month lock as per spec.
+
+
+============================================================
+RAFFLE ADMIN FUNCTIONS
+Use the following state:
+IERC20 public immutable tenxToken;
+
+uint256 private _tgeTimestamp;
+bool    private _tgeSet;
+bool    private _lockEnforced; // default true
+
+uint256 private _totalPoolAllocated;  // sum of totalTenxPool for all raffles
+uint256 private _totalClaimedOverall; // sum of all claimed TENX across raffles
+
+Create or update raffles
+
+
+function createOrUpdateRaffle(
+    uint256 raffleId,
+    uint256 seasonId,
+    uint8 tier,
+    bytes32 merkleRoot,
+    uint256 totalTenxPool,
+    bool active
+) external onlyOwner
+
+Requirements:
+seasonId > 0
+
+
+tier in [0..4] only (0=Bronze,1=Copper,2=Silver,3=Gold,4=Diamond)
+
+
+merkleRoot != bytes32(0)
+
+
+totalTenxPool > 0
+
+
+Behavior:
+If this raffleId does not exist yet (totalTenxPool == 0):
+
+
+Create a new Raffle struct.
+
+
+Increase _totalPoolAllocated by totalTenxPool.
+
+
+If this raffleId already exists:
+
+
+Allow updating seasonId, tier, merkleRoot, totalTenxPool, active.
+
+
+Require: totalTenxPool >= raffle.totalClaimed (cannot reduce pool below what has already been paid out).
+
+
+Adjust _totalPoolAllocated:
+
+
+_totalPoolAllocated = _totalPoolAllocated - oldPool + totalTenxPool;
+
+
+Emit:
+event RaffleConfigured(
+    uint256 indexed raffleId,
+    uint256 seasonId,
+    uint8 tier,
+    bytes32 merkleRoot,
+    uint256 totalTenxPool,
+    bool active
+);
+
+Toggle raffle active flag
+
+
+function setRaffleActive(uint256 raffleId, bool active) external onlyOwner;
+
+Require raffle exists (totalTenxPool > 0).
+
+
+Update raffle.active and emit RaffleConfigured again with updated active.
+
+
+View helper
+
+
+function getRaffle(uint256 raffleId)
+    external
+    view
+    returns (
+        uint256 seasonId,
+        uint8 tier,
+        bytes32 merkleRoot,
+        uint256 totalTenxPool,
+        uint256 totalClaimed,
+        bool active
+    );
+
+============================================================
+CLAIM LOGIC
+Main claim function:
+function claim(
+    uint256 raffleId,
+    uint256 tenxAmount,
+    bytes32[] calldata merkleProof
+) external nonReentrant;
+
+Requirements:
+Raffle exists: raffle.totalTenxPool > 0.
+
+
+raffle.active == true.
+
+
+tenxAmount > 0.
+
+
+If _lockEnforced == true:
+
+
+_tgeSet == true.
+
+
+block.timestamp >= _tgeTimestamp + 365 days (unlocked).
+
+
+_hasClaimed[raffleId][msg.sender] == false.
+
+
+Compute leaf: keccak256(abi.encodePacked(msg.sender, raffleId, tenxAmount)).
+
+
+Verify Merkle proof:
+
+
+MerkleProof.verify(merkleProof, raffle.merkleRoot, leaf) == true.
+
+
+Ensure:
+
+
+raffle.totalClaimed + tenxAmount <= raffle.totalTenxPool.
+
+
+Effects:
+Mark _hasClaimed[raffleId][msg.sender] = true.
+
+
+Update:
+
+
+raffle.totalClaimed += tenxAmount;
+
+
+_totalClaimedOverall += tenxAmount;
+
+
+Transfer TENX to winner:
+
+
+tenxToken.transfer(msg.sender, tenxAmount);
+
+
+Emit:
+event RaffleClaimed(address indexed user, uint256 indexed raffleId, uint256 amount);
+
+View helpers:
+function hasClaimed(uint256 raffleId, address user) external view returns (bool);
+
+function claimableFor(
+    uint256 raffleId,
+    address user,
+    uint256 tenxAmount,
+    bytes32[] calldata merkleProof
+) external view returns (bool valid, bool alreadyClaimed);
+
+In claimableFor, repeat the same checks but in view form:
+Raffle exists & active
+
+
+tenxAmount > 0
+
+
+Lock/unlock satisfied (if enforced)
+
+
+raffle.totalClaimed + tenxAmount <= raffle.totalTenxPool
+
+
+Merkle proof verifies
+
+
+Return (validProof && passesAllChecks, _hasClaimed[raffleId][user]).
+
+
+============================================================
+TGE / LOCK ADMIN FUNCTIONS
+State:
+uint256 private _tgeTimestamp;
+bool    private _tgeSet;
+bool    private _lockEnforced; // default true
+
+Set TGE timestamp
+
+
+function setTGETimestamp(uint256 tgeTimestamp) external onlyOwner;
+
+Requirements:
+_tgeSet == false (can only set once).
+
+
+tgeTimestamp > block.timestamp.
+
+
+Effects:
+Set _tgeTimestamp = tgeTimestamp;
+
+
+Set _tgeSet = true;
+
+
+Emit:
+event TGETimestampSet(uint256 tgeTimestamp);
+
+Toggle lock enforcement
+
+
+function setLockEnforced(bool enforced) external onlyOwner;
+
+Set _lockEnforced = enforced;
+
+
+Emit:
+event LockEnforcedUpdated(bool enforced);
+
+View helpers:
+function isUnlocked() public view returns (bool);
+function getUnlockTime() external view returns (uint256);
+function getTGETimestamp() external view returns (uint256 tgeTimestamp, bool tgeSet);
+
+isUnlocked() logic:
+If _lockEnforced == false → return true.
+
+
+If _lockEnforced == true and _tgeSet == false → return false.
+
+
+Else → return block.timestamp >= _tgeTimestamp + 365 days;
+
+
+getUnlockTime() returns _tgeTimestamp + 365 days if _tgeSet, otherwise 0.
+============================================================
+FUNDING & RESCUE
+The vault must be funded manually with TENX.
+function vaultBalance() public view returns (uint256) {
+    return tenxToken.balanceOf(address(this));
+}
+
+function totalPoolAllocated() external view returns (uint256) {
+    return _totalPoolAllocated;
+}
+
+function totalClaimedOverall() external view returns (uint256) {
+    return _totalClaimedOverall;
+}
+
+Owner rescue function:
+function rescueTokens(address token, address to, uint256 amount)
+    external
+    onlyOwner
+    nonReentrant;
+
+Rules:
+to != address(0)
+
+
+amount > 0
+
+
+If token == address(tenxToken):
+Compute unclaimed pool:
+
+
+uint256 totalUnclaimedPool = _totalPoolAllocated - _totalClaimedOverall;
+
+
+Let balance = tenxToken.balanceOf(address(this));
+
+
+Require:
+
+
+balance >= totalUnclaimedPool + amount;
+
+
+Then transfer TENX.
+
+
+If token != tenxToken:
+Just transfer via IERC20(token).transfer(to, amount);
+
+
+Emit:
+event TokensRescued(address indexed token, address indexed to, uint256 amount);
+
+============================================================
+EVENTS
+Implement these events:
+event RaffleConfigured(
+    uint256 indexed raffleId,
+    uint256 seasonId,
+    uint8 tier,
+    bytes32 merkleRoot,
+    uint256 totalTenxPool,
+    bool active
+);
+
+event RaffleClaimed(address indexed user, uint256 indexed raffleId, uint256 amount);
+
+event TGETimestampSet(uint256 tgeTimestamp);
+
+event LockEnforcedUpdated(bool enforced);
+
+event TokensRescued(address indexed token, address indexed to, uint256 amount);
+
+============================================================
+SECURITY / QUALITY REQUIREMENTS
+Use Solidity ^0.8.20 (no SafeMath needed).
+
+
+Use ReentrancyGuard for claim and rescueTokens.
+
+
+Use clear revert messages:
+
+
+"RaffleVault: invalid raffle"
+
+
+"RaffleVault: raffle inactive"
+
+
+"RaffleVault: invalid amount"
+
+
+"RaffleVault: TGE not set"
+
+
+"RaffleVault: not unlocked yet"
+
+
+"RaffleVault: already claimed"
+
+
+"RaffleVault: invalid proof"
+
+
+"RaffleVault: insufficient pool"
+
+
+"RaffleVault: invalid recipient"
+
+
+Code should be clean and well-commented.
+
+
+Provide public or external view getters for important state variables.
+
+
+============================================================
+BEGIN OUTPUT NOW.
+Generate full Solidity code only.
+

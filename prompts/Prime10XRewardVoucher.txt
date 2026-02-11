@@ -1,0 +1,237 @@
+Let’s do Smart Contract Prompt #2 — Voucher NFT.
+Same pattern as before:
+I’ll give you a Codex-ready prompt (you just paste it in).
+
+
+Then I’ll explain in plain English what this contract does.
+
+
+This contract is for the Reward Voucher NFTs used mostly for creators (and optionally special campaign rewards) that can later be redeemed for locked TENX via the Marketing Vault contract (Smart Contract #3).
+
+🛠 Smart Contract #2 — Voucher NFT (Codex Prompt)
+👉 Copy everything between the lines and paste into ChatGPT Codex:
+You are ChatGPT Codex. Generate a complete, production-grade Solidity smart contract for a Prime10X Reward Voucher NFT system deployed on the Base network.
+
+============================================================
+PROJECT CONTEXT (READ CAREFULLY)
+============================================================
+Prime10X has an off-chain SocialFi system where creators and possibly special participants earn "reward vouchers" that entitle them to receive a certain amount of locked TENX tokens after TGE.
+
+These vouchers will be represented as NFTs on-chain. Each NFT encodes:
+- how much TENX the holder is entitled to (value),
+- which season it belongs to,
+- whether it has already been redeemed.
+
+IMPORTANT:
+- This contract does NOT handle any actual TENX transfers.
+- This contract does NOT lock or unlock tokens itself.
+- It ONLY issues voucher NFTs and tracks their redemption status.
+- Actual TENX payouts will be handled by a separate Marketing Vault contract that reads this contract's data or listens to events.
+
+============================================================
+VOUCHER NFT REQUIREMENTS
+============================================================
+
+Contract name: Prime10XRewardVoucher
+
+Standard: ERC721 (NFT), with metadata
+
+Purpose:
+- Represent a claim/right to receive a specified amount of TENX, usually for creators or special reward recipients.
+- Each voucher:
+  - belongs to a wallet,
+  - represents a fixed TENX amount,
+  - belongs to a season,
+  - can be redeemed exactly once.
+
+Non-transferability:
+- For regulatory and anti-abuse reasons, vouchers MUST BE SOULBOUND:
+  - They CANNOT be transferred.
+  - They CANNOT be approved to others.
+  - They ONLY exist as a claim for the original recipient.
+- Override all transfer and approval functions to revert.
+
+Voucher fields (per tokenId):
+- tenxAmount: uint256 (amount of TENX tokens the voucher represents, in 18-decimal units, e.g. 1e18 = 1 TENX)
+- seasonId: uint256
+- redeemed: bool
+
+Season ID:
+- Non-zero uint256 (e.g. 1 for Season 1, 2 for Season 2, etc.)
+- A voucher is tied to a specific season for accounting.
+
+Minting rules:
+- Only the contract owner (admin) may mint vouchers.
+- Mint function parameters:
+  - address to
+  - uint256 tenxAmount
+  - uint256 seasonId
+- tenxAmount must be > 0
+- seasonId must be > 0
+
+Redemption rules:
+- Only the current owner of the voucher (token holder) may call `redeemVoucher`.
+- Redeeming:
+  - marks `redeemed = true`
+  - emits a VoucherRedeemed event
+  - optionally burns the NFT (choose one of two options below and implement clearly):
+    - OPTION A (recommended): burn the NFT on redeem.
+    - OPTION B: keep the NFT but mark it as redeemed.
+- Redemption does NOT transfer TENX; it only changes state and emits events for off-chain or another contract to process.
+
+Access control:
+- Use OpenZeppelin Ownable for admin permissions.
+- Owner can:
+  - mint vouchers
+  - optionally update baseURI
+  - revoke (burn) a voucher if needed (e.g., abuse or mistake)
+
+Metadata:
+- Use ERC721 metadata with baseURI pattern.
+- Allow owner to set a `baseTokenURI` string.
+- tokenURI(tokenId) = string(abi.encodePacked(baseTokenURI, "/", seasonId, "/", tokenId, ".json"))
+  - tokenId may be used to distinguish vouchers within the same season.
+- Do NOT hardcode URLs; use a configurable baseTokenURI.
+
+Events:
+- VoucherMinted(address indexed to, uint256 indexed tokenId, uint256 tenxAmount, uint256 seasonId)
+- VoucherRedeemed(address indexed redeemer, uint256 indexed tokenId, uint256 tenxAmount, uint256 seasonId)
+- VoucherRevoked(address indexed from, uint256 indexed tokenId)
+- BaseURIUpdated(string newBaseURI)
+
+Utility view functions:
+- getVoucherInfo(uint256 tokenId) external view returns (uint256 tenxAmount, uint256 seasonId, bool redeemed)
+- vouchersOf(address user) external view returns (uint256[] memory tokenIds)
+
+Non-transferability:
+- Override:
+  - _beforeTokenTransfer
+  - transferFrom
+  - safeTransferFrom (both overloads)
+  - approve
+  - setApprovalForAll
+- All transfers or approvals MUST revert with a clear error message like "Voucher is soulbound".
+
+============================================================
+CONTRACT STRUCTURE & QUALITY REQUIREMENTS
+============================================================
+
+Solidity:
+- pragma solidity ^0.8.20;
+
+Imports:
+- OpenZeppelin:
+  - ERC721
+  - ERC721Enumerable (optional but useful)
+  - Ownable
+  - Strings
+  - Counters (optional)
+
+Design:
+- Use Counters for token IDs.
+- Use mappings to store voucher data:
+  - mapping(uint256 => uint256) private _tenxAmount;
+  - mapping(uint256 => uint256) private _seasonId;
+  - mapping(uint256 => bool) private _redeemed;
+
+Functions (at minimum):
+- constructor(string memory name, string memory symbol) ERC721(name, symbol)
+- function setBaseURI(string calldata newBaseURI) external onlyOwner
+- function mintVoucher(address to, uint256 tenxAmount, uint256 seasonId) external onlyOwner
+- function redeemVoucher(uint256 tokenId) external
+- function revokeVoucher(uint256 tokenId) external onlyOwner
+- function getVoucherInfo(uint256 tokenId) external view returns (uint256 tenxAmount, uint256 seasonId, bool redeemed)
+- function vouchersOf(address user) external view returns (uint256[] memory tokenIds)
+- override tokenURI(uint256 tokenId)
+
+Error handling:
+- Revert with clear require messages:
+  - "Invalid season"
+  - "Invalid amount"
+  - "Already redeemed"
+  - "Not voucher owner"
+  - "Voucher is soulbound"
+
+Security:
+- Prevent re-entrancy issues on redeem (even though no external calls).
+- Validate ownership before redeeming or revoking.
+
+Gas & clarity:
+- Use efficient loops.
+- Keep code well-commented and readable.
+
+============================================================
+BEGIN OUTPUT NOW.
+Generate full Solidity code only.
+============================================================
+
+
+🧩 Human Explanation — What This Voucher NFT Does
+In plain language:
+This contract issues non-transferable NFTs that represent a right to receive locked TENX later.
+
+
+These are not the tokens themselves — just “coupons” or “vouchers”.
+
+
+How it’s used in your system:
+After SocialFi Season 1, your backend will know:
+
+
+Which creator (or special user) should receive how many TENX.
+
+
+Using that data, your admin (or a script) will call mintVoucher for each creator:
+
+
+to = creatorWallet
+
+
+tenxAmount = X TENX (as 18-decimals)
+
+
+seasonId = 1
+
+
+The creator sees this voucher in their wallet (as an NFT) and in your dApp.
+
+
+Later, when you launch the Marketing Vault contract:
+
+
+The creator will call redeemVoucher(tokenId) from your dApp.
+
+
+This marks the voucher as redeemed (and optionally burns it).
+
+
+The vault then uses this info to give them locked TENX.
+
+
+Important design choices:
+Soulbound — vouchers cannot be traded or sold. This is safer legally and protects from people trying to flip rewards.
+
+
+Season-aware — you can re-use the same contract for Season 2, 3, etc.
+
+
+Metadata-ready — you can design pretty voucher images on your site later.
+
+
+
+✅ What you do next
+Paste the prompt into Codex.
+
+
+Let Codex generate the Solidity contract.
+
+
+Paste the generated Solidity code back to me here.
+
+
+I’ll review it, fix any issues, and tighten it up for your dev.
+
+
+When we’re happy with Voucher NFT, we’ll move on to:
+Smart Contract #3 — Marketing Vault (locked TENX + distributions)
+
