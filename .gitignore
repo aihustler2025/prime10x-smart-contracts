@@ -13,5 +13,9 @@ lib/
 .vscode/
 .idea/
 
+# Scripts
+scripts/node_modules/
+scripts/dist/
+
 # Environment
 .env
