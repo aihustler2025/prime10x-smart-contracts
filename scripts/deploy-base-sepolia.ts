@@ -1,5 +1,15 @@
 import { CdpClient } from "@coinbase/cdp-sdk";
-import { createPublicClient, encodeDeployData, http, type Abi, type Chain } from "viem";
+import {
+  createPublicClient,
+  encodeDeployData,
+  http,
+  keccak256,
+  serializeTransaction,
+  type Abi,
+  type Chain,
+  type Hex,
+  type TransactionSerializableEIP1559,
+} from "viem";
 import { base, baseSepolia } from "viem/chains";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -49,22 +59,25 @@ function readArtifact(contractName: string): FoundryArtifact {
   return JSON.parse(readFileSync(artifactPath, "utf-8"));
 }
 
-const publicClient = createPublicClient({
-  chain: NET.chain as Chain,
-  transport: http(),
-});
-
 // ── Deploy a single contract ────────────────────────────────────────────────
+//
+// CDP's sendTransaction AND signTransaction APIs both reject contract-creation
+// transactions (they require a `to` field). We work around this by:
+//   1. Building the unsigned EIP-1559 tx ourselves
+//   2. Signing its hash via account.sign() (calls signEvmHash — just signs
+//      an arbitrary 32-byte hash, no tx parsing)
+//   3. Assembling the signed tx and broadcasting via eth_sendRawTransaction
 
 async function deployContract(
-  cdp: CdpClient,
-  deployer: string,
+  cdpAccount: { address: string; sign: (p: { hash: Hex }) => Promise<Hex> },
+  publicClient: ReturnType<typeof createPublicClient>,
+  nonce: number,
   contractName: string,
   constructorArgs: unknown[] = [],
 ): Promise<{ address: string; txHash: string }> {
   const artifact = readArtifact(contractName);
 
-  const data = constructorArgs.length > 0
+  const deployData = constructorArgs.length > 0
     ? encodeDeployData({
         abi: artifact.abi,
         bytecode: artifact.bytecode.object as `0x${string}`,
@@ -72,18 +85,54 @@ async function deployContract(
       })
     : artifact.bytecode.object as `0x${string}`;
 
-  console.log(`  Deploying ${contractName}...`);
+  console.log(`  Deploying ${contractName} (nonce ${nonce})...`);
 
-  const { transactionHash } = await cdp.evm.sendTransaction({
-    address: deployer as `0x${string}`,
-    network: NETWORK,
-    transaction: { data },
+  // Get fee data from the network
+  const feeData = await publicClient.estimateFeesPerGas();
+
+  const gasEstimate = await publicClient.estimateGas({
+    account: cdpAccount.address as `0x${string}`,
+    data: deployData,
   });
 
-  console.log(`  Tx: ${NET.explorer}/tx/${transactionHash}`);
+  // Build unsigned EIP-1559 transaction (no `to` = contract creation)
+  const unsignedTx: TransactionSerializableEIP1559 = {
+    type: "eip1559",
+    chainId: NET.chain.id,
+    nonce,
+    maxFeePerGas: feeData.maxFeePerGas!,
+    maxPriorityFeePerGas: feeData.maxPriorityFeePerGas!,
+    gas: gasEstimate,
+    data: deployData,
+    value: 0n,
+  };
+
+  // Serialize, hash, sign via CDP's signEvmHash (no tx parsing)
+  const serializedUnsigned = serializeTransaction(unsignedTx);
+  const txHash = keccak256(serializedUnsigned);
+  const signature = await cdpAccount.sign({ hash: txHash });
+
+  // Parse r, s, yParity from the 65-byte signature
+  const r = `0x${signature.slice(2, 66)}` as Hex;
+  const s = `0x${signature.slice(66, 130)}` as Hex;
+  const v = parseInt(signature.slice(130, 132), 16);
+  const yParity = v >= 27 ? v - 27 : v;
+
+  // Re-serialize with signature and broadcast
+  const signedTx = serializeTransaction(unsignedTx, {
+    r,
+    s,
+    yParity: yParity as 0 | 1,
+  });
+
+  const broadcastHash = await publicClient.sendRawTransaction({
+    serializedTransaction: signedTx,
+  });
+
+  console.log(`  Tx: ${NET.explorer}/tx/${broadcastHash}`);
 
   const receipt = await publicClient.waitForTransactionReceipt({
-    hash: transactionHash as `0x${string}`,
+    hash: broadcastHash,
   });
 
   if (!receipt.contractAddress) {
@@ -92,7 +141,7 @@ async function deployContract(
 
   console.log(`  Contract: ${NET.explorer}/address/${receipt.contractAddress}`);
   console.log(`  Deployed at: ${receipt.contractAddress}\n`);
-  return { address: receipt.contractAddress, txHash: transactionHash };
+  return { address: receipt.contractAddress, txHash: broadcastHash };
 }
 
 // ── Main ────────────────────────────────────────────────────────────────────
@@ -100,7 +149,7 @@ async function deployContract(
 async function main() {
   console.log(`Prime10X — ${NET.label} Deploy\n`);
 
-  // 1. Init CDP client (reads CDP_API_KEY_ID, CDP_API_KEY_SECRET, CDP_WALLET_SECRET from env)
+  // 1. Init CDP client
   const cdp = new CdpClient();
 
   // 2. Get or create a named deployer account
@@ -108,7 +157,13 @@ async function main() {
   console.log(`Deployer: ${account.address}`);
   console.log(`  ${NET.explorer}/address/${account.address}\n`);
 
-  // 3. Fund from faucet (testnet only)
+  // 3. Public client for RPC calls
+  const publicClient = createPublicClient({
+    chain: NET.chain as Chain,
+    transport: http(),
+  });
+
+  // 4. Fund from faucet (testnet only)
   if (NET.faucet) {
     console.log("Requesting faucet funds...");
     const faucet = await cdp.evm.requestFaucet({
@@ -123,27 +178,31 @@ async function main() {
     });
   }
 
-  // 4. Deploy contracts
+  // 5. Deploy contracts — track nonce ourselves to avoid stale RPC reads
+  let nonce = await publicClient.getTransactionCount({
+    address: account.address as `0x${string}`,
+  });
+
   const deployed: Record<string, { address: string; txHash: string }> = {};
 
   deployed.BadgeSBT = await deployContract(
-    cdp, account.address,
+    account, publicClient, nonce++,
     "Prime10XBadgeSBT",
   );
 
   deployed.MarketingVault = await deployContract(
-    cdp, account.address,
+    account, publicClient, nonce++,
     "Prime10XMarketingVault",
     ["0x0000000000000000000000000000000000000000"], // deferred TENX token
   );
 
   deployed.RewardVoucher = await deployContract(
-    cdp, account.address,
+    account, publicClient, nonce++,
     "Prime10XRewardVoucher",
     ["Prime10X Voucher", "P10X-V"],
   );
 
-  // 5. Write contract-addresses.md
+  // 6. Write contract-addresses.md
   const md = [
     "# Prime10X Contract Addresses",
     "",
