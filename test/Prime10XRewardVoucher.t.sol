@@ -15,11 +15,15 @@ contract Prime10XRewardVoucherTest is Test {
     event VoucherRevoked(address indexed from, uint256 indexed tokenId);
     event BaseURIUpdated(string newBaseURI);
     event ClaimEnableDateSet(uint256 claimEnableDate);
+    event EmergencyAdminUpdated(address admin);
+
+    address public emergencyAdmin;
 
     function setUp() public {
         owner = address(this);
         alice = makeAddr("alice");
         bob = makeAddr("bob");
+        emergencyAdmin = makeAddr("emergencyAdmin");
 
         voucher = new Prime10XRewardVoucher("Prime10X Voucher", "P10X-V");
     }
@@ -567,5 +571,53 @@ contract Prime10XRewardVoucherTest is Test {
     function test_supportsInterface_unsupported_returnsFalse() public view {
         assertFalse(voucher.supportsInterface(0xffffffff));
         assertFalse(voucher.supportsInterface(0xdeadbeef));
+    }
+
+    // ------------------------------------------------------------------
+    // Emergency Admin
+    // ------------------------------------------------------------------
+
+    function test_setEmergencyAdmin_success() public {
+        vm.expectEmit(false, false, false, true);
+        emit EmergencyAdminUpdated(emergencyAdmin);
+
+        voucher.setEmergencyAdmin(emergencyAdmin);
+    }
+
+    function test_setEmergencyAdmin_revert_nonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        voucher.setEmergencyAdmin(emergencyAdmin);
+    }
+
+    function test_emergencyUpdateClaimDate_success() public {
+        voucher.setEmergencyAdmin(emergencyAdmin);
+
+        uint256 newDate = block.timestamp + 90 days;
+
+        vm.expectEmit(false, false, false, true);
+        emit ClaimEnableDateSet(newDate);
+
+        vm.prank(emergencyAdmin);
+        voucher.emergencyUpdateClaimDate(newDate);
+
+        assertEq(voucher.claimEnableDate(), newDate);
+        assertTrue(voucher.claimEnableDateSet());
+    }
+
+    function test_emergencyUpdateClaimDate_revert_nonAdmin() public {
+        voucher.setEmergencyAdmin(emergencyAdmin);
+
+        vm.prank(alice);
+        vm.expectRevert("RewardVoucher: not emergency admin");
+        voucher.emergencyUpdateClaimDate(block.timestamp + 90 days);
+    }
+
+    function test_emergencyUpdateClaimDate_revert_zeroDate() public {
+        voucher.setEmergencyAdmin(emergencyAdmin);
+
+        vm.prank(emergencyAdmin);
+        vm.expectRevert("RewardVoucher: invalid date");
+        voucher.emergencyUpdateClaimDate(0);
     }
 }

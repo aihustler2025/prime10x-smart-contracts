@@ -8,10 +8,11 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title Prime10X Marketing Vault
 /// @author Prime10X Team
-/// @notice Holds TENX tokens for marketing campaigns and enforces a global time lock before users can claim.
-/// @dev Tokens are allocated per-user per-season and become claimable LOCK_DURATION after the TGE timestamp is set.
-///      The owner or designated distributors can allocate tokens. The owner can update the TGE timestamp
-///      or disable the time lock entirely for emergency flexibility.
+/// @notice Holds TENX tokens for marketing campaigns and enforces a configurable claim-enable date.
+/// @dev Tokens are allocated per-user per-season and become claimable after the claim enable date.
+///      The owner or designated distributors can allocate tokens. The owner can set the claim enable date
+///      and an emergency admin (multi-sig) can update it if needed. The TENX token address can be set
+///      after deployment via a one-shot setter, allowing the vault to deploy before the token exists.
 contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
     // ------------------------------------------------------------------
     // Events
@@ -28,18 +29,22 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
     /// @param amount The amount of TENX tokens claimed.
     event Claimed(address indexed user, uint256 amount);
 
-    /// @notice Emitted when the TGE timestamp is set or updated.
-    /// @param tgeTimestamp The configured Token Generation Event timestamp.
-    event TGETimestampSet(uint256 tgeTimestamp);
+    /// @notice Emitted when the claim enable date is set or updated.
+    /// @param claimEnableDate The configured claim enable timestamp.
+    event ClaimEnableDateSet(uint256 claimEnableDate);
 
     /// @notice Emitted when a distributor role is updated.
     /// @param account The address whose distributor status changed.
     /// @param isDistributor Whether the account is now a distributor.
     event DistributorUpdated(address indexed account, bool isDistributor);
 
-    /// @notice Emitted when lock enforcement is toggled.
-    /// @param enforced Whether the lock is now enforced.
-    event LockEnforcedUpdated(bool enforced);
+    /// @notice Emitted when the emergency admin is updated.
+    /// @param admin The new emergency admin address.
+    event EmergencyAdminUpdated(address admin);
+
+    /// @notice Emitted when the TENX token address is set.
+    /// @param token The TENX token address.
+    event TokenAddressSet(address token);
 
     /// @notice Emitted when TENX tokens are deposited into the vault.
     /// @param depositor The address that deposited the tokens.
@@ -51,19 +56,16 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
     // ------------------------------------------------------------------
 
     /// @notice The TENX ERC-20 token managed by this vault.
-    IERC20 public immutable tenxToken;
+    IERC20 public tenxToken;
 
-    /// @notice Duration (in seconds) tokens remain locked after TGE.
-    uint256 public constant LOCK_DURATION = 365 days;
+    /// @notice Timestamp after which claims are allowed. Zero until set.
+    uint256 public claimEnableDate;
 
-    /// @notice The configured TGE timestamp. Zero until set.
-    uint256 public tgeTimestamp;
+    /// @notice Whether the claim enable date has been set.
+    bool public claimEnableDateSet;
 
-    /// @notice Whether the TGE timestamp has been set.
-    bool public tgeSet;
-
-    /// @dev Whether the global lock is enforced. Defaults to true.
-    bool private _lockEnforced = true;
+    /// @dev The emergency admin address (e.g. multi-sig) that can update the claim date.
+    address private _emergencyAdmin;
 
     /// @dev Mapping of addresses to their distributor status.
     mapping(address => bool) private _distributors;
@@ -87,10 +89,10 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
     // Constructor
     // ------------------------------------------------------------------
 
-    /// @notice Deploys the marketing vault bound to the given TENX token.
-    /// @param tenxToken_ Address of the TENX ERC-20 token contract.
+    /// @notice Deploys the marketing vault, optionally bound to a TENX token.
+    /// @dev Pass address(0) if the TENX token is not yet deployed; set it later via setTokenAddress().
+    /// @param tenxToken_ Address of the TENX ERC-20 token contract, or address(0).
     constructor(address tenxToken_) Ownable(msg.sender) {
-        require(tenxToken_ != address(0), "MarketingVault: invalid token");
         tenxToken = IERC20(tenxToken_);
     }
 
@@ -108,23 +110,43 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
     // Admin functions
     // ------------------------------------------------------------------
 
-    /// @notice Sets or updates the TGE timestamp.
+    /// @notice Sets or updates the claim enable date.
     /// @dev Can be called multiple times to adjust the claim date as timelines shift.
-    ///      The timestamp must be in the future.
-    /// @param tgeTimestamp_ Timestamp for the Token Generation Event.
-    function setTGETimestamp(uint256 tgeTimestamp_) external onlyOwner {
-        require(tgeTimestamp_ > block.timestamp, "MarketingVault: TGE must be in future");
-        tgeTimestamp = tgeTimestamp_;
-        tgeSet = true;
-        emit TGETimestampSet(tgeTimestamp_);
+    /// @param claimEnableDate_ Timestamp after which claims are allowed (must be > 0).
+    function setClaimEnableDate(uint256 claimEnableDate_) external onlyOwner {
+        require(claimEnableDate_ > 0, "MarketingVault: invalid date");
+        claimEnableDate = claimEnableDate_;
+        claimEnableDateSet = true;
+        emit ClaimEnableDateSet(claimEnableDate_);
     }
 
-    /// @notice Enable or disable lock enforcement.
-    /// @dev When disabled, claims are allowed regardless of TGE status. Use for emergency unlock.
-    /// @param enforced Whether to enforce the time lock.
-    function setLockEnforced(bool enforced) external onlyOwner {
-        _lockEnforced = enforced;
-        emit LockEnforcedUpdated(enforced);
+    /// @notice Allows the emergency admin to update the claim enable date.
+    /// @dev Only callable by the emergency admin address (e.g. multi-sig wallet).
+    /// @param claimEnableDate_ New claim enable timestamp (must be > 0).
+    function emergencyUpdateClaimDate(uint256 claimEnableDate_) external {
+        require(msg.sender == _emergencyAdmin, "MarketingVault: not emergency admin");
+        require(claimEnableDate_ > 0, "MarketingVault: invalid date");
+        claimEnableDate = claimEnableDate_;
+        claimEnableDateSet = true;
+        emit ClaimEnableDateSet(claimEnableDate_);
+    }
+
+    /// @notice Sets the emergency admin address.
+    /// @dev Only callable by the owner. The emergency admin can update the claim date.
+    /// @param admin The new emergency admin address.
+    function setEmergencyAdmin(address admin) external onlyOwner {
+        _emergencyAdmin = admin;
+        emit EmergencyAdminUpdated(admin);
+    }
+
+    /// @notice Sets the TENX token address. Can only be called once (one-shot setter).
+    /// @dev Allows the vault to be deployed before the TENX token exists.
+    /// @param token The TENX token address (must not be address(0)).
+    function setTokenAddress(address token) external onlyOwner {
+        require(address(tenxToken) == address(0), "MarketingVault: token already set");
+        require(token != address(0), "MarketingVault: invalid token");
+        tenxToken = IERC20(token);
+        emit TokenAddressSet(token);
     }
 
     /// @notice Updates distributor status for an account.
@@ -142,8 +164,10 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
 
     /// @notice Deposits TENX tokens into the vault.
     /// @dev Caller must have approved this contract to spend at least `amount` TENX tokens.
+    ///      Requires that the token address has been set.
     /// @param amount Amount of TENX tokens to deposit.
     function depositTokens(uint256 amount) external {
+        require(address(tenxToken) != address(0), "MarketingVault: token not set");
         require(amount > 0, "MarketingVault: invalid amount");
         require(tenxToken.transferFrom(_msgSender(), address(this), amount), "MarketingVault: deposit failed");
         emit TokensDeposited(_msgSender(), amount);
@@ -167,7 +191,10 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
     /// @param users Array of recipient addresses.
     /// @param amounts Array of amounts corresponding to each user.
     /// @param seasonId Season identifier (must be > 0).
-    function batchAllocateLockedTokens(address[] calldata users, uint256[] calldata amounts, uint256 seasonId) external onlyOwnerOrDistributor {
+    function batchAllocateLockedTokens(address[] calldata users, uint256[] calldata amounts, uint256 seasonId)
+        external
+        onlyOwnerOrDistributor
+    {
         require(users.length == amounts.length, "MarketingVault: length mismatch");
         for (uint256 i = 0; i < users.length; i++) {
             _allocate(users[i], amounts[i], seasonId);
@@ -179,6 +206,7 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
     /// @param amount Amount of TENX tokens to lock.
     /// @param seasonId Season identifier (must be > 0).
     function _allocate(address user, uint256 amount, uint256 seasonId) internal {
+        require(address(tenxToken) != address(0), "MarketingVault: token not set");
         require(user != address(0), "MarketingVault: invalid user");
         require(amount > 0, "MarketingVault: invalid amount");
         require(seasonId > 0, "MarketingVault: invalid season");
@@ -196,8 +224,8 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
     // Claim functions
     // ------------------------------------------------------------------
 
-    /// @notice Claims all unlocked tokens for the caller after the lock period has passed.
-    /// @custom:security Protected by ReentrancyGuard. Requires lock to be bypassed or TGE + LOCK_DURATION elapsed.
+    /// @notice Claims all unlocked tokens for the caller after the claim enable date has passed.
+    /// @custom:security Protected by ReentrancyGuard.
     function claim() external nonReentrant {
         _claimTo(_msgSender());
     }
@@ -212,7 +240,7 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
     /// @dev Internal claim logic used by both `claim` and `claimFor`.
     /// @param user Address whose locked tokens are being claimed.
     function _claimTo(address user) internal {
-        require(isUnlocked(), "MarketingVault: not unlocked yet");
+        require(isClaimEnabled(), "MarketingVault: claims not enabled");
         uint256 claimable = _totalLocked[user];
         require(claimable > 0, "MarketingVault: nothing to claim");
 
@@ -257,28 +285,17 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
         return _seasonTotalLocked[seasonId];
     }
 
-    /// @notice Returns the unlock timestamp derived from TGE.
-    /// @return The timestamp after which claims are allowed, or 0 if TGE is not set.
-    function getUnlockTime() external view returns (uint256) {
-        return tgeSet ? tgeTimestamp + LOCK_DURATION : 0;
-    }
-
     /// @notice Returns true if claims are currently allowed.
-    /// @dev Returns true if lock is disabled, or if TGE is set and lock period has elapsed.
-    /// @return Whether claims are currently unlocked.
-    function isUnlocked() public view returns (bool) {
-        if (!_lockEnforced) {
-            return true;
-        }
-        if (!tgeSet) {
-            return false;
-        }
-        return block.timestamp >= tgeTimestamp + LOCK_DURATION;
+    /// @dev Returns true if claim enable date is set and current time has passed it.
+    /// @return Whether claims are currently enabled.
+    function isClaimEnabled() public view returns (bool) {
+        return claimEnableDateSet && block.timestamp >= claimEnableDate;
     }
 
     /// @notice Returns the TENX token balance held by the vault.
     /// @return The current TENX balance of this contract.
     function vaultBalance() public view returns (uint256) {
+        require(address(tenxToken) != address(0), "MarketingVault: token not set");
         return tenxToken.balanceOf(address(this));
     }
 
@@ -296,7 +313,7 @@ contract Prime10XMarketingVault is Ownable2Step, ReentrancyGuard {
         require(to != address(0), "MarketingVault: invalid user");
         IERC20 erc20 = IERC20(token);
 
-        if (token == address(tenxToken)) {
+        if (address(tenxToken) != address(0) && token == address(tenxToken)) {
             uint256 balance = erc20.balanceOf(address(this));
             require(balance >= amount, "MarketingVault: insufficient balance");
             require(balance - amount >= _globalLocked, "MarketingVault: insufficient TENX balance");

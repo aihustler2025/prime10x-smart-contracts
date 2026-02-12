@@ -35,6 +35,9 @@ contract Prime10XRewardVoucher is ERC721Enumerable, Ownable2Step, ReentrancyGuar
     /// @dev Base URI for token metadata.
     string private _baseTokenURI;
 
+    /// @dev The emergency admin address (e.g. multi-sig) that can update the claim date.
+    address private _emergencyAdmin;
+
     /// @notice Timestamp after which vouchers can be redeemed. Zero until set.
     uint256 public claimEnableDate;
 
@@ -72,6 +75,10 @@ contract Prime10XRewardVoucher is ERC721Enumerable, Ownable2Step, ReentrancyGuar
     /// @param claimEnableDate The new claim enable timestamp.
     event ClaimEnableDateSet(uint256 claimEnableDate);
 
+    /// @notice Emitted when the emergency admin is updated.
+    /// @param admin The new emergency admin address.
+    event EmergencyAdminUpdated(address admin);
+
     // ------------------------------------------------------------------
     // Constructor
     // ------------------------------------------------------------------
@@ -101,6 +108,25 @@ contract Prime10XRewardVoucher is ERC721Enumerable, Ownable2Step, ReentrancyGuar
         claimEnableDate = claimEnableDate_;
         claimEnableDateSet = true;
         emit ClaimEnableDateSet(claimEnableDate_);
+    }
+
+    /// @notice Allows the emergency admin to update the claim enable date.
+    /// @dev Only callable by the emergency admin address (e.g. multi-sig wallet).
+    /// @param claimEnableDate_ New claim enable timestamp (must be > 0).
+    function emergencyUpdateClaimDate(uint256 claimEnableDate_) external {
+        require(msg.sender == _emergencyAdmin, "RewardVoucher: not emergency admin");
+        require(claimEnableDate_ > 0, "RewardVoucher: invalid date");
+        claimEnableDate = claimEnableDate_;
+        claimEnableDateSet = true;
+        emit ClaimEnableDateSet(claimEnableDate_);
+    }
+
+    /// @notice Sets the emergency admin address.
+    /// @dev Only callable by the owner. The emergency admin can update the claim date.
+    /// @param admin The new emergency admin address.
+    function setEmergencyAdmin(address admin) external onlyOwner {
+        _emergencyAdmin = admin;
+        emit EmergencyAdminUpdated(admin);
     }
 
     // ------------------------------------------------------------------

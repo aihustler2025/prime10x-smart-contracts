@@ -12,12 +12,14 @@ contract Prime10XMarketingVaultTest is Test {
     address public alice;
     address public bob;
     address public distributor;
+    address public emergencyAdmin;
 
     event Locked(address indexed user, uint256 amount, uint256 indexed seasonId);
     event Claimed(address indexed user, uint256 amount);
-    event TGETimestampSet(uint256 tgeTimestamp);
+    event ClaimEnableDateSet(uint256 claimEnableDate);
     event DistributorUpdated(address indexed account, bool isDistributor);
-    event LockEnforcedUpdated(bool enforced);
+    event EmergencyAdminUpdated(address admin);
+    event TokenAddressSet(address token);
     event TokensDeposited(address indexed depositor, uint256 amount);
 
     function setUp() public {
@@ -25,6 +27,7 @@ contract Prime10XMarketingVaultTest is Test {
         alice = makeAddr("alice");
         bob = makeAddr("bob");
         distributor = makeAddr("distributor");
+        emergencyAdmin = makeAddr("emergencyAdmin");
 
         tenx = new MockTENX();
         vault = new Prime10XMarketingVault(address(tenx));
@@ -42,47 +45,128 @@ contract Prime10XMarketingVaultTest is Test {
         assertEq(vault.owner(), owner);
     }
 
-    function test_constructor_revert_zeroAddress() public {
-        vm.expectRevert("MarketingVault: invalid token");
-        new Prime10XMarketingVault(address(0));
+    function test_constructor_allowsZeroToken() public {
+        Prime10XMarketingVault v = new Prime10XMarketingVault(address(0));
+        assertEq(address(v.tenxToken()), address(0));
     }
 
     // ------------------------------------------------------------------
-    // TGE
+    // Claim Enable Date
     // ------------------------------------------------------------------
 
-    function test_setTGE() public {
-        uint256 tge = block.timestamp + 1 days;
+    function test_setClaimEnableDate() public {
+        uint256 claimDate = block.timestamp + 30 days;
 
         vm.expectEmit(false, false, false, true);
-        emit TGETimestampSet(tge);
+        emit ClaimEnableDateSet(claimDate);
 
-        vault.setTGETimestamp(tge);
+        vault.setClaimEnableDate(claimDate);
 
-        assertEq(vault.tgeTimestamp(), tge);
-        assertTrue(vault.tgeSet());
+        assertEq(vault.claimEnableDate(), claimDate);
+        assertTrue(vault.claimEnableDateSet());
     }
 
-    function test_setTGE_canUpdate() public {
-        uint256 tge1 = block.timestamp + 1 days;
-        vault.setTGETimestamp(tge1);
-        assertEq(vault.tgeTimestamp(), tge1);
+    function test_setClaimEnableDate_canUpdate() public {
+        uint256 date1 = block.timestamp + 30 days;
+        vault.setClaimEnableDate(date1);
+        assertEq(vault.claimEnableDate(), date1);
 
-        uint256 tge2 = block.timestamp + 2 days;
-        vault.setTGETimestamp(tge2);
-        assertEq(vault.tgeTimestamp(), tge2);
-        assertTrue(vault.tgeSet());
+        uint256 date2 = block.timestamp + 60 days;
+        vault.setClaimEnableDate(date2);
+        assertEq(vault.claimEnableDate(), date2);
+        assertTrue(vault.claimEnableDateSet());
     }
 
-    function test_setTGE_revert_pastTimestamp() public {
-        vm.expectRevert("MarketingVault: TGE must be in future");
-        vault.setTGETimestamp(block.timestamp - 1);
+    function test_setClaimEnableDate_revert_zeroDate() public {
+        vm.expectRevert("MarketingVault: invalid date");
+        vault.setClaimEnableDate(0);
     }
 
-    function test_setTGE_revert_nonOwner() public {
+    function test_setClaimEnableDate_revert_nonOwner() public {
         vm.prank(alice);
         vm.expectRevert();
-        vault.setTGETimestamp(block.timestamp + 1 days);
+        vault.setClaimEnableDate(block.timestamp + 30 days);
+    }
+
+    // ------------------------------------------------------------------
+    // Token Address (one-shot setter)
+    // ------------------------------------------------------------------
+
+    function test_setTokenAddress_success() public {
+        Prime10XMarketingVault v = new Prime10XMarketingVault(address(0));
+        MockTENX newToken = new MockTENX();
+
+        vm.expectEmit(false, false, false, true);
+        emit TokenAddressSet(address(newToken));
+
+        v.setTokenAddress(address(newToken));
+        assertEq(address(v.tenxToken()), address(newToken));
+    }
+
+    function test_setTokenAddress_revert_alreadySet() public {
+        vm.expectRevert("MarketingVault: token already set");
+        vault.setTokenAddress(address(tenx));
+    }
+
+    function test_setTokenAddress_revert_zeroAddress() public {
+        Prime10XMarketingVault v = new Prime10XMarketingVault(address(0));
+        vm.expectRevert("MarketingVault: invalid token");
+        v.setTokenAddress(address(0));
+    }
+
+    function test_setTokenAddress_revert_nonOwner() public {
+        Prime10XMarketingVault v = new Prime10XMarketingVault(address(0));
+        vm.prank(alice);
+        vm.expectRevert();
+        v.setTokenAddress(address(tenx));
+    }
+
+    // ------------------------------------------------------------------
+    // Emergency Admin
+    // ------------------------------------------------------------------
+
+    function test_setEmergencyAdmin_success() public {
+        vm.expectEmit(false, false, false, true);
+        emit EmergencyAdminUpdated(emergencyAdmin);
+
+        vault.setEmergencyAdmin(emergencyAdmin);
+    }
+
+    function test_setEmergencyAdmin_revert_nonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.setEmergencyAdmin(emergencyAdmin);
+    }
+
+    function test_emergencyUpdateClaimDate_success() public {
+        vault.setEmergencyAdmin(emergencyAdmin);
+
+        uint256 newDate = block.timestamp + 90 days;
+
+        vm.expectEmit(false, false, false, true);
+        emit ClaimEnableDateSet(newDate);
+
+        vm.prank(emergencyAdmin);
+        vault.emergencyUpdateClaimDate(newDate);
+
+        assertEq(vault.claimEnableDate(), newDate);
+        assertTrue(vault.claimEnableDateSet());
+    }
+
+    function test_emergencyUpdateClaimDate_revert_nonAdmin() public {
+        vault.setEmergencyAdmin(emergencyAdmin);
+
+        vm.prank(alice);
+        vm.expectRevert("MarketingVault: not emergency admin");
+        vault.emergencyUpdateClaimDate(block.timestamp + 90 days);
+    }
+
+    function test_emergencyUpdateClaimDate_revert_zeroDate() public {
+        vault.setEmergencyAdmin(emergencyAdmin);
+
+        vm.prank(emergencyAdmin);
+        vm.expectRevert("MarketingVault: invalid date");
+        vault.emergencyUpdateClaimDate(0);
     }
 
     // ------------------------------------------------------------------
@@ -185,6 +269,12 @@ contract Prime10XMarketingVaultTest is Test {
         vault.allocateLockedTokens(alice, 100 ether, 0);
     }
 
+    function test_allocate_revert_tokenNotSet() public {
+        Prime10XMarketingVault v = new Prime10XMarketingVault(address(0));
+        vm.expectRevert("MarketingVault: token not set");
+        v.allocateLockedTokens(alice, 100 ether, 1);
+    }
+
     // ------------------------------------------------------------------
     // Claim
     // ------------------------------------------------------------------
@@ -192,10 +282,9 @@ contract Prime10XMarketingVaultTest is Test {
     function test_claim_success() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
 
-        // Set TGE and warp past lock
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.expectEmit(true, false, false, true);
         emit Claimed(alice, 100 ether);
@@ -208,29 +297,29 @@ contract Prime10XMarketingVaultTest is Test {
         assertEq(vault.totalClaimedOf(alice), 100 ether);
     }
 
-    function test_claim_revert_beforeUnlock() public {
+    function test_claim_revert_beforeClaimDate() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 364 days);
+        uint256 claimDate = block.timestamp + 1 days;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate - 1);
 
         vm.prank(alice);
-        vm.expectRevert("MarketingVault: not unlocked yet");
+        vm.expectRevert("MarketingVault: claims not enabled");
         vault.claim();
     }
 
-    function test_claim_revert_tgeNotSet() public {
+    function test_claim_revert_claimDateNotSet() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
 
         vm.prank(alice);
-        vm.expectRevert("MarketingVault: not unlocked yet");
+        vm.expectRevert("MarketingVault: claims not enabled");
         vault.claim();
     }
 
     function test_claim_revert_nothingToClaim() public {
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.prank(alice);
         vm.expectRevert("MarketingVault: nothing to claim");
@@ -243,9 +332,9 @@ contract Prime10XMarketingVaultTest is Test {
 
     function test_claimFor_ownerCanClaim() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vault.claimFor(alice);
 
@@ -254,50 +343,13 @@ contract Prime10XMarketingVaultTest is Test {
 
     function test_claimFor_revert_nonOwner() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.prank(bob);
         vm.expectRevert();
         vault.claimFor(alice);
-    }
-
-    // ------------------------------------------------------------------
-    // Lock enforcement
-    // ------------------------------------------------------------------
-
-    function test_setLockEnforced_disable() public {
-        vm.expectEmit(false, false, false, true);
-        emit LockEnforcedUpdated(false);
-
-        vault.setLockEnforced(false);
-        assertTrue(vault.isUnlocked());
-    }
-
-    function test_setLockEnforced_reEnable() public {
-        vault.setLockEnforced(false);
-        assertTrue(vault.isUnlocked());
-
-        vault.setLockEnforced(true);
-        assertFalse(vault.isUnlocked());
-    }
-
-    function test_setLockEnforced_revert_nonOwner() public {
-        vm.prank(alice);
-        vm.expectRevert();
-        vault.setLockEnforced(false);
-    }
-
-    function test_claim_lockDisabled() public {
-        vault.allocateLockedTokens(alice, 100 ether, 1);
-        vault.setLockEnforced(false);
-
-        vm.prank(alice);
-        vault.claim();
-
-        assertEq(tenx.balanceOf(alice), 100 ether);
-        assertEq(vault.totalLockedOf(alice), 0);
     }
 
     // ------------------------------------------------------------------
@@ -322,6 +374,12 @@ contract Prime10XMarketingVaultTest is Test {
     function test_depositTokens_revert_zeroAmount() public {
         vm.expectRevert("MarketingVault: invalid amount");
         vault.depositTokens(0);
+    }
+
+    function test_depositTokens_revert_tokenNotSet() public {
+        Prime10XMarketingVault v = new Prime10XMarketingVault(address(0));
+        vm.expectRevert("MarketingVault: token not set");
+        v.depositTokens(100 ether);
     }
 
     // ------------------------------------------------------------------
@@ -360,25 +418,15 @@ contract Prime10XMarketingVaultTest is Test {
     // Views
     // ------------------------------------------------------------------
 
-    function test_getUnlockTime_noTGE() public view {
-        assertEq(vault.getUnlockTime(), 0);
-    }
+    function test_isClaimEnabled() public {
+        assertFalse(vault.isClaimEnabled());
 
-    function test_getUnlockTime_withTGE() public {
-        uint256 tge = block.timestamp + 1 days;
-        vault.setTGETimestamp(tge);
-        assertEq(vault.getUnlockTime(), tge + 365 days);
-    }
+        uint256 claimDate = block.timestamp + 1 days;
+        vault.setClaimEnableDate(claimDate);
+        assertFalse(vault.isClaimEnabled());
 
-    function test_isUnlocked() public {
-        assertFalse(vault.isUnlocked());
-
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        assertFalse(vault.isUnlocked());
-
-        vm.warp(tge + 365 days);
-        assertTrue(vault.isUnlocked());
+        vm.warp(claimDate);
+        assertTrue(vault.isClaimEnabled());
     }
 
     function test_vaultBalance() public view {
@@ -386,7 +434,7 @@ contract Prime10XMarketingVaultTest is Test {
     }
 
     // ------------------------------------------------------------------
-    // NEW: Allocation accumulation
+    // Allocation accumulation
     // ------------------------------------------------------------------
 
     function test_allocate_sameUserSameSeason_accumulates() public {
@@ -402,9 +450,9 @@ contract Prime10XMarketingVaultTest is Test {
         vault.allocateLockedTokens(alice, 100 ether, 1);
         vault.allocateLockedTokens(alice, 200 ether, 2);
 
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.prank(alice);
         vault.claim();
@@ -442,28 +490,28 @@ contract Prime10XMarketingVaultTest is Test {
     }
 
     // ------------------------------------------------------------------
-    // NEW: Claiming boundaries
+    // Claiming boundaries
     // ------------------------------------------------------------------
 
-    function test_claim_atExactUnlockTimestamp() public {
+    function test_claim_atExactClaimDate() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days); // exactly at boundary (>=)
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate); // exactly at boundary (>=)
 
         vm.prank(alice);
         vault.claim();
         assertEq(tenx.balanceOf(alice), 100 ether);
     }
 
-    function test_claim_oneSecondBeforeUnlock_reverts() public {
+    function test_claim_oneSecondBeforeClaimDate_reverts() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days - 1);
+        uint256 claimDate = block.timestamp + 1 days;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate - 1);
 
         vm.prank(alice);
-        vm.expectRevert("MarketingVault: not unlocked yet");
+        vm.expectRevert("MarketingVault: claims not enabled");
         vault.claim();
     }
 
@@ -471,9 +519,9 @@ contract Prime10XMarketingVaultTest is Test {
         vault.allocateLockedTokens(alice, 100 ether, 1);
         vault.allocateLockedTokens(bob, 200 ether, 1);
 
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.prank(alice);
         vault.claim();
@@ -489,9 +537,9 @@ contract Prime10XMarketingVaultTest is Test {
 
     function test_claim_claimedTwice_reverts() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.prank(alice);
         vault.claim();
@@ -505,9 +553,9 @@ contract Prime10XMarketingVaultTest is Test {
         vault.allocateLockedTokens(alice, 100 ether, 1);
         vault.allocateLockedTokens(alice, 200 ether, 2);
 
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.expectEmit(true, false, false, true);
         emit Claimed(alice, 300 ether);
@@ -517,16 +565,16 @@ contract Prime10XMarketingVaultTest is Test {
     }
 
     // ------------------------------------------------------------------
-    // NEW: Access control
+    // Access control
     // ------------------------------------------------------------------
 
     function test_claimFor_distributorCannotClaimFor() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
         vault.setDistributor(distributor, true);
 
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.prank(distributor);
         vm.expectRevert();
@@ -534,16 +582,16 @@ contract Prime10XMarketingVaultTest is Test {
     }
 
     function test_claimFor_zeroAddress_reverts() public {
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.expectRevert("MarketingVault: nothing to claim");
         vault.claimFor(address(0));
     }
 
     // ------------------------------------------------------------------
-    // NEW: Deposits
+    // Deposits
     // ------------------------------------------------------------------
 
     function test_deposit_revert_noApproval() public {
@@ -567,25 +615,7 @@ contract Prime10XMarketingVaultTest is Test {
     }
 
     // ------------------------------------------------------------------
-    // NEW: Lock & TGE
-    // ------------------------------------------------------------------
-
-    function test_setLockEnforced_true_emitsEvent() public {
-        vault.setLockEnforced(false);
-
-        vm.expectEmit(false, false, false, true);
-        emit LockEnforcedUpdated(true);
-
-        vault.setLockEnforced(true);
-    }
-
-    function test_setTGE_revert_currentTimestamp() public {
-        vm.expectRevert("MarketingVault: TGE must be in future");
-        vault.setTGETimestamp(block.timestamp);
-    }
-
-    // ------------------------------------------------------------------
-    // NEW: View defaults
+    // View defaults
     // ------------------------------------------------------------------
 
     function test_totalLockedOf_unknownUser_returnsZero() public {
@@ -600,9 +630,9 @@ contract Prime10XMarketingVaultTest is Test {
         vault.allocateLockedTokens(alice, 100 ether, 1);
         vault.allocateLockedTokens(alice, 200 ether, 2);
 
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.prank(alice);
         vault.claim();
@@ -621,7 +651,7 @@ contract Prime10XMarketingVaultTest is Test {
     }
 
     // ------------------------------------------------------------------
-    // NEW: Rescue extras
+    // Rescue extras
     // ------------------------------------------------------------------
 
     function test_rescueTokens_revert_nonOwner() public {
@@ -633,7 +663,7 @@ contract Prime10XMarketingVaultTest is Test {
     function test_rescueTokens_exactSurplus() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
 
-        // Vault has 1M, 100 locked → surplus = 999_900
+        // Vault has 1M, 100 locked -> surplus = 999_900
         vault.rescueTokens(address(tenx), owner, 999_900 ether);
         assertEq(tenx.balanceOf(address(vault)), 100 ether);
     }
@@ -641,14 +671,14 @@ contract Prime10XMarketingVaultTest is Test {
     function test_rescueTokens_tenxAfterClaim() public {
         vault.allocateLockedTokens(alice, 100 ether, 1);
 
-        uint256 tge = block.timestamp + 1;
-        vault.setTGETimestamp(tge);
-        vm.warp(tge + 365 days);
+        uint256 claimDate = block.timestamp + 1;
+        vault.setClaimEnableDate(claimDate);
+        vm.warp(claimDate);
 
         vm.prank(alice);
         vault.claim();
 
-        // After claim, globalLocked drops by 100 → all vault balance is rescuable
+        // After claim, globalLocked drops by 100 -> all vault balance is rescuable
         uint256 remaining = tenx.balanceOf(address(vault));
         vault.rescueTokens(address(tenx), owner, remaining);
         assertEq(tenx.balanceOf(address(vault)), 0);
