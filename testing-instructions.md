@@ -203,4 +203,4 @@ Click **Write**. Distributors are the addresses allowed to allocate tokens to us
 | Revoke voucher | Succeeds |
 | Marketing Vault claim date set | `isClaimEnabled` returns true |
 
-Once you are happy with everything, let Andrew know and he will move forward with the mainnet deployment plan.
+Once you are happy with everything, let me know and I will move forward with the mainnet deployment plan.
