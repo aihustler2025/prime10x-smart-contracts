@@ -1,0 +1,13 @@
+{
+  "name": "Prime10X Reward Voucher — Prism",
+  "description": "Season 1 Creator Reward Voucher. Variable reward amount determined per deal. KYC required for redemption.",
+  "image": "ipfs://bafybeigqbvjhfkwvsv7ra3ez7n5p7gz6irbqedbmwi7llckhsfgufz7mci/prism.png",
+  "external_url": "https://prime10x.io",
+  "attributes": [
+    { "trait_type": "Tier", "value": "Prism" },
+    { "trait_type": "Season", "value": "1" },
+    { "trait_type": "TENX Amount", "value": 0, "display_type": "number" },
+    { "trait_type": "Lock Period", "value": "12 months" },
+    { "trait_type": "Network", "value": "Base" }
+  ]
+}

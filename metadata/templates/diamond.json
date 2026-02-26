@@ -1,0 +1,13 @@
+{
+  "name": "Prime10X Reward Voucher — Diamond",
+  "description": "Season 1 Raffle Reward Voucher. Redeemable for 2,000 locked TENX after TGE. KYC required for redemption.",
+  "image": "ipfs://bafybeigqbvjhfkwvsv7ra3ez7n5p7gz6irbqedbmwi7llckhsfgufz7mci/diamond.png",
+  "external_url": "https://prime10x.io",
+  "attributes": [
+    { "trait_type": "Tier", "value": "Diamond" },
+    { "trait_type": "Season", "value": "1" },
+    { "trait_type": "TENX Amount", "value": 2000, "display_type": "number" },
+    { "trait_type": "Lock Period", "value": "12 months" },
+    { "trait_type": "Network", "value": "Base" }
+  ]
+}

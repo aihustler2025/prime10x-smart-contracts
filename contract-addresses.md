@@ -11,3 +11,13 @@
 Deployer: [`0x756F6DdCB76456D563B2d1A0c303E79B1170E5b1`](https://sepolia.basescan.org/address/0x756F6DdCB76456D563B2d1A0c303E79B1170E5b1)
 
 MarketingVault token address not yet set. Call `setTokenAddress()` after TENX deployment.
+
+## Ownership Transfer (Base Sepolia)
+
+`transferOwnership(0x57cb69D41aD0A413d718DcCd5f6551e4abE526e9)` called on all contracts. **Pending — new owner must call `acceptOwnership()` on each contract to finalise.**
+
+| Contract | transferOwnership tx |
+| --- | --- |
+| BadgeSBT | [0x86e830...](https://sepolia.basescan.org/tx/0x86e8301687774eb0a446e1a4250768f98a9d12e3b4a66c02399fee27524c82db) |
+| MarketingVault | [0xb4da6f...](https://sepolia.basescan.org/tx/0xb4da6f7db496c23001579d82215a6ad5c4c1905e2cb5d8184f9dd3f21a665841) |
+| RewardVoucher | [0x5a7b3e...](https://sepolia.basescan.org/tx/0x5a7b3e6872a31f7991575c50c0ce7519d6923f581eff58447b2c1133ef69f5f3) |
