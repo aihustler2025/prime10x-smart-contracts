@@ -43,7 +43,7 @@ const NET = NETWORKS[NETWORK];
 
 const CONTRACT_ADDRESSES: Record<NetworkId, Record<string, Hex>> = {
   "base-sepolia": {
-    BadgeSBT:       "0x535dbdde4f792ac9b342ab08cb2c8ee42b22659b",
+    BadgeSBT:       "0x1fb9d377f6d73fe8d1573affaf4a342c7bf426e6",
     MarketingVault: "0x8b981488296de50289ae26b67516333d8ba216ea",
     RewardVoucher:  "0x0cea12c59fa4704ff153e2df1282e6c7a1529880",
   },
