@@ -1,0 +1,11 @@
+{
+  "name": "Prime10X Badge — Junior Geologist",
+  "description": "Season 1 Achievement Badge. Awarded to Prime10X members who reached the Junior Geologist rank.",
+  "image": "ipfs://bafybeiecsitl2omuactoezgl7leqazyl5dzs2vslmle3zl57bmsz5ydnde",
+  "external_url": "https://prime10x.com",
+  "attributes": [
+    { "trait_type": "Badge Type", "value": "Junior Geologist" },
+    { "trait_type": "Season", "value": "1" },
+    { "trait_type": "Network", "value": "Base" }
+  ]
+}

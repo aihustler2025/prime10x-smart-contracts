@@ -1,0 +1,11 @@
+{
+  "name": "Prime10X Badge — Discovery Leader",
+  "description": "Season 1 Achievement Badge. Awarded to Prime10X members who reached the Discovery Leader rank.",
+  "image": "ipfs://bafybeidms6ninzb2s3hx5zxjyuqqngp2shyq7fnsb2ln3whx3cbrmlnb7i",
+  "external_url": "https://prime10x.com",
+  "attributes": [
+    { "trait_type": "Badge Type", "value": "Discovery Leader" },
+    { "trait_type": "Season", "value": "1" },
+    { "trait_type": "Network", "value": "Base" }
+  ]
+}

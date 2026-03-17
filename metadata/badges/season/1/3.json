@@ -1,0 +1,11 @@
+{
+  "name": "Prime10X Badge — Senior Geologist",
+  "description": "Season 1 Achievement Badge. Awarded to Prime10X members who reached the Senior Geologist rank.",
+  "image": "ipfs://bafybeih3ggk6j3ojmxo2jgu6fvfjisvkjito37cegl6iphq5eqyackb2iu",
+  "external_url": "https://prime10x.com",
+  "attributes": [
+    { "trait_type": "Badge Type", "value": "Senior Geologist" },
+    { "trait_type": "Season", "value": "1" },
+    { "trait_type": "Network", "value": "Base" }
+  ]
+}

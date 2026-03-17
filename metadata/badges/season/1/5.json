@@ -1,0 +1,11 @@
+{
+  "name": "Prime10X Badge — Chief Geologist",
+  "description": "Season 1 Achievement Badge. Awarded to Prime10X members who reached the Chief Geologist rank.",
+  "image": "ipfs://bafybeifr24ruddaifw5m2hu67qnkx4bjl7qr64qziv6dsljejksfw4kile",
+  "external_url": "https://prime10x.com",
+  "attributes": [
+    { "trait_type": "Badge Type", "value": "Chief Geologist" },
+    { "trait_type": "Season", "value": "1" },
+    { "trait_type": "Network", "value": "Base" }
+  ]
+}

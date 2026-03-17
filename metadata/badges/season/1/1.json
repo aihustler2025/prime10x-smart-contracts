@@ -1,0 +1,11 @@
+{
+  "name": "Prime10X Badge — Field Assistant",
+  "description": "Season 1 Achievement Badge. Awarded to Prime10X members who reached the Field Assistant rank.",
+  "image": "ipfs://bafybeifslnwlwpflqphrfjzlqamxtxtvrxhcew5mu56lrllg6u4azdwbfm",
+  "external_url": "https://prime10x.com",
+  "attributes": [
+    { "trait_type": "Badge Type", "value": "Field Assistant" },
+    { "trait_type": "Season", "value": "1" },
+    { "trait_type": "Network", "value": "Base" }
+  ]
+}

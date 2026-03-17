@@ -1,0 +1,11 @@
+{
+  "name": "Prime10X Badge — Prospector",
+  "description": "Season 1 Achievement Badge. Awarded to Prime10X members who reached the Prospector rank.",
+  "image": "ipfs://bafybeid2zpjivd7prja646o6r5nwwd4uytrjfxlh2qtiofppetxgmwy3dm",
+  "external_url": "https://prime10x.com",
+  "attributes": [
+    { "trait_type": "Badge Type", "value": "Prospector" },
+    { "trait_type": "Season", "value": "1" },
+    { "trait_type": "Network", "value": "Base" }
+  ]
+}

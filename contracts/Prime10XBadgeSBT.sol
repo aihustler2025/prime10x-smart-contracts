@@ -40,6 +40,12 @@ contract Prime10XBadgeSBT is ERC721, Ownable2Step {
     /// @dev Tracks the season of a tokenId.
     mapping(uint256 => uint256) private _seasonOf;
 
+    /// @dev Base URI for token metadata. Appended with `{season}/{badgeType}.json`.
+    string private _baseTokenURI;
+
+    /// @dev Address permitted to mint badges (e.g. an automated backend wallet).
+    address private _minter;
+
     // ------------------------------------------------------------------
     // Events
     // ------------------------------------------------------------------
@@ -55,6 +61,14 @@ contract Prime10XBadgeSBT is ERC721, Ownable2Step {
     /// @param from The address whose badge was revoked.
     /// @param tokenId The revoked token ID.
     event BadgeRevoked(address indexed from, uint256 indexed tokenId);
+
+    /// @notice Emitted when the base metadata URI is updated.
+    /// @param newBaseURI The new base URI.
+    event BaseURIUpdated(string newBaseURI);
+
+    /// @notice Emitted when the minter address is updated.
+    /// @param minter The new minter address.
+    event MinterUpdated(address indexed minter);
 
     // ------------------------------------------------------------------
     // Errors
@@ -72,25 +86,31 @@ contract Prime10XBadgeSBT is ERC721, Ownable2Step {
     /// @dev Thrown when the wallet already has a badge for the given season.
     error BadgeAlreadyAssigned();
 
+    /// @dev Thrown when the caller is not the owner or minter.
+    error NotAuthorized();
+
     // ------------------------------------------------------------------
     // Constructor
     // ------------------------------------------------------------------
 
     /// @notice Deploys the badge contract with fixed name and symbol.
-    constructor() ERC721("Prime10X Badge", "P10X-SBT") Ownable(msg.sender) {}
+    constructor() ERC721("Prime10X Badge", "P10X-SBT") Ownable(msg.sender) {
+        _baseTokenURI = "https://prime10x.io/badges/season/";
+    }
 
     // ------------------------------------------------------------------
     // External functions
     // ------------------------------------------------------------------
 
     /// @notice Mint a badge to a wallet for a given season and badge type.
-    /// @dev Only callable by the contract owner after off-chain eligibility checks.
+    /// @dev Callable by the owner or the designated minter address.
     ///      Each wallet can only hold one badge per season.
     /// @param to Recipient wallet address.
     /// @param season Season identifier (must be non-zero).
     /// @param badgeType Badge type (0-5).
-    /// @custom:security Owner-only. Enforces one-badge-per-season-per-wallet.
-    function mintBadge(address to, uint256 season, uint256 badgeType) external onlyOwner {
+    /// @custom:security Owner or minter only. Enforces one-badge-per-season-per-wallet.
+    function mintBadge(address to, uint256 season, uint256 badgeType) external {
+        if (msg.sender != owner() && msg.sender != _minter) revert NotAuthorized();
         if (season == 0) revert InvalidSeason();
         if (badgeType < BADGE_TYPE_MIN || badgeType > BADGE_TYPE_MAX) revert InvalidBadgeType();
         if (_seasonBadgeOf[to][season] != 0) revert BadgeAlreadyAssigned();
@@ -143,12 +163,33 @@ contract Prime10XBadgeSBT is ERC721, Ownable2Step {
         return _totalSupply;
     }
 
+    /// @notice Set the designated minter address.
+    /// @dev Only callable by the owner. Pass address(0) to remove the minter.
+    /// @param minter The address to grant minting rights to.
+    function setMinter(address minter) external onlyOwner {
+        _minter = minter;
+        emit MinterUpdated(minter);
+    }
+
+    /// @notice Returns the current minter address.
+    function getMinter() external view returns (address) {
+        return _minter;
+    }
+
+    /// @notice Update the base metadata URI.
+    /// @dev Only callable by the contract owner.
+    /// @param newBaseURI New base URI (e.g. "https://prime10x.io/badges/season/").
+    function setBaseURI(string calldata newBaseURI) external onlyOwner {
+        _baseTokenURI = newBaseURI;
+        emit BaseURIUpdated(newBaseURI);
+    }
+
     // ------------------------------------------------------------------
     // Metadata
     // ------------------------------------------------------------------
 
     /// @notice Returns the metadata URI for a given token.
-    /// @dev Format: `https://prime10x.com/badges/season/{season}/{badgeType}.json`
+    /// @dev Format: `{baseTokenURI}{season}/{badgeType}.json`
     /// @param tokenId The token ID to query.
     /// @return The full metadata URI string.
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
@@ -158,7 +199,7 @@ contract Prime10XBadgeSBT is ERC721, Ownable2Step {
 
         return string(
             abi.encodePacked(
-                "https://prime10x.com/badges/season/",
+                _baseTokenURI,
                 Strings.toString(season),
                 "/",
                 Strings.toString(badgeType),
