@@ -16,6 +16,8 @@ contract Prime10XRewardVoucherTest is Test {
     event BaseURIUpdated(string newBaseURI);
     event ClaimEnableDateSet(uint256 claimEnableDate);
     event EmergencyAdminUpdated(address admin);
+    event VoucherRaffleConfigured(uint256 indexed raffleId, uint256 seasonId, bytes32 merkleRoot, bool active);
+    event VoucherClaimed(address indexed claimer, uint256 indexed raffleId, uint256 indexed tokenId, uint256 tenxAmount, uint256 seasonId);
 
     address public emergencyAdmin;
 
@@ -619,5 +621,266 @@ contract Prime10XRewardVoucherTest is Test {
         vm.prank(emergencyAdmin);
         vm.expectRevert("RewardVoucher: invalid date");
         voucher.emergencyUpdateClaimDate(0);
+    }
+
+    // ------------------------------------------------------------------
+    // Merkle-claim helpers
+    // ------------------------------------------------------------------
+
+    function _leaf(address claimer, uint256 raffleId, uint256 tenxAmount) internal pure returns (bytes32) {
+        return keccak256(bytes.concat(keccak256(abi.encode(claimer, raffleId, tenxAmount))));
+    }
+
+    function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
+        return a < b ? keccak256(abi.encodePacked(a, b)) : keccak256(abi.encodePacked(b, a));
+    }
+
+    // ------------------------------------------------------------------
+    // setVoucherRaffle
+    // ------------------------------------------------------------------
+
+    function test_setVoucherRaffle_onlyOwner() public {
+        bytes32 root = _leaf(alice, 1, 100 ether);
+        vm.prank(alice);
+        vm.expectRevert();
+        voucher.setVoucherRaffle(1, 1, root, true);
+    }
+
+    function test_setVoucherRaffle_revert_zeroSeason() public {
+        bytes32 root = _leaf(alice, 1, 100 ether);
+        vm.expectRevert("RewardVoucher: invalid season");
+        voucher.setVoucherRaffle(1, 0, root, true);
+    }
+
+    function test_setVoucherRaffle_revert_zeroRoot() public {
+        vm.expectRevert("RewardVoucher: invalid root");
+        voucher.setVoucherRaffle(1, 1, bytes32(0), true);
+    }
+
+    function test_setVoucherRaffle_overwrites() public {
+        bytes32 root1 = _leaf(alice, 1, 100 ether);
+        bytes32 root2 = _leaf(bob, 1, 200 ether);
+
+        voucher.setVoucherRaffle(1, 1, root1, true);
+        voucher.setVoucherRaffle(1, 2, root2, false);
+
+        (uint256 seasonId, bytes32 merkleRoot, bool active) = voucher.getVoucherRaffle(1);
+        assertEq(seasonId, 2);
+        assertEq(merkleRoot, root2);
+        assertEq(active, false);
+    }
+
+    function test_setVoucherRaffle_emitsEvent() public {
+        bytes32 root = _leaf(alice, 1, 100 ether);
+        vm.expectEmit(true, false, false, true);
+        emit VoucherRaffleConfigured(1, 1, root, true);
+        voucher.setVoucherRaffle(1, 1, root, true);
+    }
+
+    // ------------------------------------------------------------------
+    // setVoucherRaffleActive
+    // ------------------------------------------------------------------
+
+    function test_setVoucherRaffleActive_toggles() public {
+        bytes32 root = _leaf(alice, 1, 100 ether);
+        voucher.setVoucherRaffle(1, 1, root, true);
+
+        voucher.setVoucherRaffleActive(1, false);
+        ( , , bool active) = voucher.getVoucherRaffle(1);
+        assertEq(active, false);
+
+        voucher.setVoucherRaffleActive(1, true);
+        ( , , active) = voucher.getVoucherRaffle(1);
+        assertEq(active, true);
+    }
+
+    function test_setVoucherRaffleActive_revert_notConfigured() public {
+        vm.expectRevert("RewardVoucher: raffle not configured");
+        voucher.setVoucherRaffleActive(99, true);
+    }
+
+    // ------------------------------------------------------------------
+    // claimVoucher — single-leaf tree (proof = empty array)
+    // ------------------------------------------------------------------
+
+    function test_claimVoucher_singleWinner() public {
+        uint256 raffleId = 1;
+        uint256 tenxAmount = 500 ether;
+        bytes32 leaf = _leaf(alice, raffleId, tenxAmount);
+        // Single-leaf tree: leaf is the root.
+        voucher.setVoucherRaffle(raffleId, 7, leaf, true);
+
+        bytes32[] memory proof = new bytes32[](0);
+
+        vm.prank(alice);
+        voucher.claimVoucher(raffleId, tenxAmount, proof);
+
+        // Token minted to alice (tokenId 1, since fresh contract).
+        assertEq(voucher.ownerOf(1), alice);
+        assertEq(voucher.totalSupply(), 1);
+        (uint256 amt, uint256 season, bool redeemed) = voucher.getVoucherInfo(1);
+        assertEq(amt, tenxAmount);
+        assertEq(season, 7);
+        assertEq(redeemed, false);
+        assertTrue(voucher.hasClaimed(raffleId, alice));
+    }
+
+    function test_claimVoucher_emitsEvents() public {
+        uint256 raffleId = 1;
+        uint256 tenxAmount = 500 ether;
+        bytes32 leaf = _leaf(alice, raffleId, tenxAmount);
+        voucher.setVoucherRaffle(raffleId, 7, leaf, true);
+
+        bytes32[] memory proof = new bytes32[](0);
+
+        vm.expectEmit(true, true, true, true);
+        emit VoucherClaimed(alice, raffleId, 1, tenxAmount, 7);
+        vm.expectEmit(true, true, false, true);
+        emit VoucherMinted(alice, 1, tenxAmount, 7);
+
+        vm.prank(alice);
+        voucher.claimVoucher(raffleId, tenxAmount, proof);
+    }
+
+    function test_claimVoucher_revert_invalidProof() public {
+        uint256 raffleId = 1;
+        bytes32 leaf = _leaf(alice, raffleId, 500 ether);
+        voucher.setVoucherRaffle(raffleId, 7, leaf, true);
+
+        // Bob submits a proof for himself, but the root is alice's leaf.
+        bytes32[] memory proof = new bytes32[](0);
+        vm.prank(bob);
+        vm.expectRevert("RewardVoucher: invalid proof");
+        voucher.claimVoucher(raffleId, 500 ether, proof);
+    }
+
+    function test_claimVoucher_revert_wrongAmount() public {
+        uint256 raffleId = 1;
+        bytes32 leaf = _leaf(alice, raffleId, 500 ether);
+        voucher.setVoucherRaffle(raffleId, 7, leaf, true);
+
+        // Same address, same raffleId — but wrong amount.
+        bytes32[] memory proof = new bytes32[](0);
+        vm.prank(alice);
+        vm.expectRevert("RewardVoucher: invalid proof");
+        voucher.claimVoucher(raffleId, 999 ether, proof);
+    }
+
+    function test_claimVoucher_revert_alreadyClaimed() public {
+        uint256 raffleId = 1;
+        uint256 tenxAmount = 500 ether;
+        bytes32 leaf = _leaf(alice, raffleId, tenxAmount);
+        voucher.setVoucherRaffle(raffleId, 7, leaf, true);
+
+        bytes32[] memory proof = new bytes32[](0);
+
+        vm.prank(alice);
+        voucher.claimVoucher(raffleId, tenxAmount, proof);
+
+        vm.prank(alice);
+        vm.expectRevert("RewardVoucher: already claimed");
+        voucher.claimVoucher(raffleId, tenxAmount, proof);
+    }
+
+    function test_claimVoucher_revert_inactive() public {
+        uint256 raffleId = 1;
+        bytes32 leaf = _leaf(alice, raffleId, 500 ether);
+        voucher.setVoucherRaffle(raffleId, 7, leaf, false);
+
+        bytes32[] memory proof = new bytes32[](0);
+        vm.prank(alice);
+        vm.expectRevert("RewardVoucher: raffle inactive");
+        voucher.claimVoucher(raffleId, 500 ether, proof);
+    }
+
+    function test_claimVoucher_revert_notConfigured() public {
+        bytes32[] memory proof = new bytes32[](0);
+        vm.prank(alice);
+        vm.expectRevert("RewardVoucher: raffle not configured");
+        voucher.claimVoucher(99, 500 ether, proof);
+    }
+
+    function test_claimVoucher_revert_zeroAmount() public {
+        uint256 raffleId = 1;
+        bytes32 leaf = _leaf(alice, raffleId, 1 ether);
+        voucher.setVoucherRaffle(raffleId, 7, leaf, true);
+
+        bytes32[] memory proof = new bytes32[](0);
+        vm.prank(alice);
+        vm.expectRevert("RewardVoucher: invalid amount");
+        voucher.claimVoucher(raffleId, 0, proof);
+    }
+
+    // ------------------------------------------------------------------
+    // claimVoucher — multi-leaf tree (real proof)
+    // ------------------------------------------------------------------
+
+    function test_claimVoucher_multipleWinners() public {
+        uint256 raffleId = 42;
+        uint256 amountA = 100 ether;
+        uint256 amountB = 200 ether;
+
+        bytes32 leafA = _leaf(alice, raffleId, amountA);
+        bytes32 leafB = _leaf(bob, raffleId, amountB);
+        bytes32 root = _hashPair(leafA, leafB);
+
+        voucher.setVoucherRaffle(raffleId, 3, root, true);
+
+        // alice claims with proof = [leafB]
+        bytes32[] memory proofA = new bytes32[](1);
+        proofA[0] = leafB;
+        vm.prank(alice);
+        voucher.claimVoucher(raffleId, amountA, proofA);
+
+        // bob claims with proof = [leafA]
+        bytes32[] memory proofB = new bytes32[](1);
+        proofB[0] = leafA;
+        vm.prank(bob);
+        voucher.claimVoucher(raffleId, amountB, proofB);
+
+        assertEq(voucher.totalSupply(), 2);
+        assertEq(voucher.ownerOf(1), alice);
+        assertEq(voucher.ownerOf(2), bob);
+        assertTrue(voucher.hasClaimed(raffleId, alice));
+        assertTrue(voucher.hasClaimed(raffleId, bob));
+    }
+
+    // ------------------------------------------------------------------
+    // Soulbound enforcement on claimed tokens
+    // ------------------------------------------------------------------
+
+    function test_claimedVoucher_isSoulbound() public {
+        uint256 raffleId = 1;
+        uint256 tenxAmount = 500 ether;
+        bytes32 leaf = _leaf(alice, raffleId, tenxAmount);
+        voucher.setVoucherRaffle(raffleId, 7, leaf, true);
+
+        bytes32[] memory proof = new bytes32[](0);
+        vm.prank(alice);
+        voucher.claimVoucher(raffleId, tenxAmount, proof);
+
+        vm.prank(alice);
+        vm.expectRevert("Voucher is soulbound");
+        voucher.transferFrom(alice, bob, 1);
+    }
+
+    // ------------------------------------------------------------------
+    // hasClaimed view
+    // ------------------------------------------------------------------
+
+    function test_hasClaimed_returnsCorrectState() public {
+        uint256 raffleId = 1;
+        bytes32 leaf = _leaf(alice, raffleId, 500 ether);
+        voucher.setVoucherRaffle(raffleId, 7, leaf, true);
+
+        assertFalse(voucher.hasClaimed(raffleId, alice));
+
+        bytes32[] memory proof = new bytes32[](0);
+        vm.prank(alice);
+        voucher.claimVoucher(raffleId, 500 ether, proof);
+
+        assertTrue(voucher.hasClaimed(raffleId, alice));
+        assertFalse(voucher.hasClaimed(raffleId, bob));
+        assertFalse(voucher.hasClaimed(99, alice));
     }
 }

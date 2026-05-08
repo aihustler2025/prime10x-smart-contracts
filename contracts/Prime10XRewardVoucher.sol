@@ -6,6 +6,7 @@ import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 /// @title Prime10X Reward Voucher NFT (Soulbound)
 /// @author Prime10X Team
@@ -31,6 +32,17 @@ contract Prime10XRewardVoucher is ERC721Enumerable, Ownable2Step, ReentrancyGuar
 
     /// @dev Whether a voucher has been redeemed.
     mapping(uint256 => bool) private _redeemed;
+
+    /// @dev Per-raffle Merkle-claim configuration. Populated by `setVoucherRaffle`.
+    struct VoucherRaffle {
+        uint256 seasonId;
+        bytes32 merkleRoot;
+        bool active;
+    }
+    mapping(uint256 => VoucherRaffle) private _voucherRaffles;
+
+    /// @dev Per-raffle, per-claimer claim flag.
+    mapping(uint256 => mapping(address => bool)) private _hasClaimed;
 
     /// @dev Base URI for token metadata.
     string private _baseTokenURI;
@@ -78,6 +90,12 @@ contract Prime10XRewardVoucher is ERC721Enumerable, Ownable2Step, ReentrancyGuar
     /// @notice Emitted when the emergency admin is updated.
     /// @param admin The new emergency admin address.
     event EmergencyAdminUpdated(address admin);
+
+    /// @notice Emitted when a per-raffle Merkle-claim configuration is set or updated.
+    event VoucherRaffleConfigured(uint256 indexed raffleId, uint256 seasonId, bytes32 merkleRoot, bool active);
+
+    /// @notice Emitted when a winner self-claims their voucher via Merkle proof.
+    event VoucherClaimed(address indexed claimer, uint256 indexed raffleId, uint256 indexed tokenId, uint256 tenxAmount, uint256 seasonId);
 
     // ------------------------------------------------------------------
     // Constructor
@@ -171,6 +189,75 @@ contract Prime10XRewardVoucher is ERC721Enumerable, Ownable2Step, ReentrancyGuar
         _burn(tokenId);
 
         emit VoucherRedeemed(msg.sender, tokenId, tenxAmount, seasonId);
+    }
+
+    // ------------------------------------------------------------------
+    // Merkle-claim flow (admin posts a root, winners self-mint)
+    // ------------------------------------------------------------------
+
+    /// @notice Configure (or reconfigure) a per-raffle Merkle root for self-mint claims.
+    /// @dev Owner-only. Setting `active=false` lets you publish a root without enabling claims yet.
+    /// @param raffleId Off-chain raffle identifier.
+    /// @param seasonId Season the resulting vouchers belong to (must be > 0).
+    /// @param merkleRoot Root of a tree whose leaves are
+    ///        `keccak256(bytes.concat(keccak256(abi.encode(claimer, raffleId, tenxAmount))))`.
+    /// @param active Whether claims are immediately allowed.
+    function setVoucherRaffle(uint256 raffleId, uint256 seasonId, bytes32 merkleRoot, bool active) external onlyOwner {
+        require(seasonId > 0, "RewardVoucher: invalid season");
+        require(merkleRoot != bytes32(0), "RewardVoucher: invalid root");
+
+        _voucherRaffles[raffleId] = VoucherRaffle({seasonId: seasonId, merkleRoot: merkleRoot, active: active});
+        emit VoucherRaffleConfigured(raffleId, seasonId, merkleRoot, active);
+    }
+
+    /// @notice Toggle whether claims are accepted for a configured raffle.
+    /// @param raffleId The raffle to toggle.
+    /// @param active New active flag.
+    function setVoucherRaffleActive(uint256 raffleId, bool active) external onlyOwner {
+        VoucherRaffle storage r = _voucherRaffles[raffleId];
+        require(r.merkleRoot != bytes32(0), "RewardVoucher: raffle not configured");
+        r.active = active;
+        emit VoucherRaffleConfigured(raffleId, r.seasonId, r.merkleRoot, active);
+    }
+
+    /// @notice Self-mint a voucher by submitting a valid Merkle proof.
+    /// @dev Each (raffleId, msg.sender) pair can only claim once. The recipient is always
+    ///      `msg.sender` to prevent grief / front-running. tenxAmount must match the leaf exactly.
+    /// @param raffleId The configured raffle.
+    /// @param tenxAmount The amount of TENX (18 decimals) the voucher represents (must match leaf).
+    /// @param merkleProof Proof of inclusion in the configured tree.
+    /// @custom:security ReentrancyGuard. _hasClaimed flips before mint to prevent reentry.
+    function claimVoucher(uint256 raffleId, uint256 tenxAmount, bytes32[] calldata merkleProof) external nonReentrant {
+        VoucherRaffle storage r = _voucherRaffles[raffleId];
+        require(r.merkleRoot != bytes32(0), "RewardVoucher: raffle not configured");
+        require(r.active, "RewardVoucher: raffle inactive");
+        require(tenxAmount > 0, "RewardVoucher: invalid amount");
+        require(!_hasClaimed[raffleId][msg.sender], "RewardVoucher: already claimed");
+
+        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(msg.sender, raffleId, tenxAmount))));
+        require(MerkleProof.verify(merkleProof, r.merkleRoot, leaf), "RewardVoucher: invalid proof");
+
+        _hasClaimed[raffleId][msg.sender] = true;
+
+        uint256 tokenId = ++_nextTokenId;
+        _tenxAmount[tokenId] = tenxAmount;
+        _seasonId[tokenId] = r.seasonId;
+        _safeMint(msg.sender, tokenId);
+
+        emit VoucherClaimed(msg.sender, raffleId, tokenId, tenxAmount, r.seasonId);
+        emit VoucherMinted(msg.sender, tokenId, tenxAmount, r.seasonId);
+    }
+
+    /// @notice Get the configuration for a raffle's Merkle-claim.
+    /// @param raffleId The raffle to query.
+    function getVoucherRaffle(uint256 raffleId) external view returns (uint256 seasonId, bytes32 merkleRoot, bool active) {
+        VoucherRaffle storage r = _voucherRaffles[raffleId];
+        return (r.seasonId, r.merkleRoot, r.active);
+    }
+
+    /// @notice Whether a given user has already claimed in a given raffle.
+    function hasClaimed(uint256 raffleId, address user) external view returns (bool) {
+        return _hasClaimed[raffleId][user];
     }
 
     /// @notice Revoke (burn) a voucher. Only callable by the contract owner.
