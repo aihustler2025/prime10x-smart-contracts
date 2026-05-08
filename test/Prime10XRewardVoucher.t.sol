@@ -883,4 +883,64 @@ contract Prime10XRewardVoucherTest is Test {
         assertFalse(voucher.hasClaimed(raffleId, bob));
         assertFalse(voucher.hasClaimed(99, alice));
     }
+
+    // ------------------------------------------------------------------
+    // _hasClaimed isolation across raffles
+    // ------------------------------------------------------------------
+
+    function test_claimVoucher_sameUser_differentRaffles() public {
+        // alice wins both raffleId=1 and raffleId=2 in the same season.
+        // Each is its own leaf/root/claim — _hasClaimed is keyed on
+        // (raffleId, msg.sender), so both should succeed.
+        bytes32 leaf1 = _leaf(alice, 1, 100 ether);
+        bytes32 leaf2 = _leaf(alice, 2, 200 ether);
+
+        voucher.setVoucherRaffle(1, 7, leaf1, true);
+        voucher.setVoucherRaffle(2, 7, leaf2, true);
+
+        bytes32[] memory proof = new bytes32[](0);
+
+        vm.prank(alice);
+        voucher.claimVoucher(1, 100 ether, proof);
+
+        vm.prank(alice);
+        voucher.claimVoucher(2, 200 ether, proof);
+
+        assertEq(voucher.totalSupply(), 2);
+        assertEq(voucher.ownerOf(1), alice);
+        assertEq(voucher.ownerOf(2), alice);
+        assertTrue(voucher.hasClaimed(1, alice));
+        assertTrue(voucher.hasClaimed(2, alice));
+    }
+
+    // ------------------------------------------------------------------
+    // tokenId counter shared between mintVoucher (admin-direct) and claimVoucher (Merkle)
+    // ------------------------------------------------------------------
+
+    function test_tokenIdCounter_sharedAcrossMintAndClaim() public {
+        // Admin mints one directly to alice (token 1).
+        voucher.mintVoucher(alice, 100 ether, 7);
+
+        // Then alice self-claims for raffleId=1 (token 2).
+        bytes32 leaf = _leaf(alice, 1, 200 ether);
+        voucher.setVoucherRaffle(1, 7, leaf, true);
+        bytes32[] memory proof = new bytes32[](0);
+        vm.prank(alice);
+        voucher.claimVoucher(1, 200 ether, proof);
+
+        // Then admin mints another to bob (token 3).
+        voucher.mintVoucher(bob, 50 ether, 7);
+
+        assertEq(voucher.totalSupply(), 3);
+        assertEq(voucher.ownerOf(1), alice);
+        assertEq(voucher.ownerOf(2), alice);
+        assertEq(voucher.ownerOf(3), bob);
+
+        (uint256 amt1, , ) = voucher.getVoucherInfo(1);
+        (uint256 amt2, , ) = voucher.getVoucherInfo(2);
+        (uint256 amt3, , ) = voucher.getVoucherInfo(3);
+        assertEq(amt1, 100 ether);
+        assertEq(amt2, 200 ether);
+        assertEq(amt3, 50 ether);
+    }
 }
